@@ -1,0 +1,43 @@
+# Pilot configuration: ~2 GPU-hours on Kaggle T4
+# 1 model x 1 seed x (1 clean + 3 corruptions x 3 severities) = 10 cells
+
+name: pilot
+track: vision
+
+# Models to train and evaluate
+models:
+  - resnet18
+
+# Seeds for reproducibility and variance estimation
+seeds:
+  - 0
+
+# Corruption families and their severities
+shift_families:
+  - gaussian_noise
+  - defocus_blur
+  - fog
+
+severities:
+  - 1
+  - 3
+  - 5
+
+# Attribution methods to evaluate
+explainers:
+  - integrated_gradients
+  - grad_cam
+  - random
+
+# Imputation scheme for removal curves
+imputation: mean
+
+# Evaluation set size (1000 from CIFAR-10 test set)
+n_eval_images: 1000
+
+# Attribution parameters
+ig_steps: 32
+
+# Training parameters
+epochs: 50
+batch_size: 256
