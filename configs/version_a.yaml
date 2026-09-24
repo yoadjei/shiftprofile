@@ -1,0 +1,54 @@
+# Version A: pre-registered primary grid
+# 3 models x 5 seeds x (1 clean + 5 corruptions x 3 severities) = 240 cells
+# Estimated GPU budget: ~50-100 GPU-hours (multiple Kaggle sessions with preemption)
+
+name: version_a
+track: vision
+
+# Models: three diverse architectures for robustness of conclusions
+models:
+  - resnet18
+  - resnet18_augmix
+  - vit_tiny
+
+# Seeds: five for stable variance component estimation
+# (REML unbiased at five groups; fewer would compromise the mixed model)
+seeds:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+
+# Five corruption families covering the main distribution-shift categories
+shift_families:
+  - gaussian_noise      # Noise family
+  - shot_noise          # Noise family
+  - defocus_blur        # Blur family
+  - fog                 # Weather family
+  - jpeg_compression    # Digital family
+
+# Three severity levels for gradient measurement
+severities:
+  - 1
+  - 3
+  - 5
+
+# Attribution methods for faithfulness evaluation
+explainers:
+  - integrated_gradients
+  - grad_cam
+  - random
+
+# Imputation scheme for removal curves (testing attribution quality)
+imputation: mean
+
+# Evaluation set size: 2000 from CIFAR-10 test set for stable metric estimation
+n_eval_images: 2000
+
+# Attribution parameters
+ig_steps: 32
+
+# Training parameters (same as pilot for comparability)
+epochs: 50
+batch_size: 256
