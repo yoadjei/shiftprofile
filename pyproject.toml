@@ -1,0 +1,27 @@
+[project]
+name = "shiftprofile"
+version = "0.1.0"
+description = "Reliability degradation profiles under distribution shift"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "statsmodels>=0.14",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+vision = ["torch>=2.4", "torchvision>=0.19", "timm>=1.0", "captum>=0.7"]
+tabular = ["folktables>=0.0.12", "xgboost>=2.0", "lightgbm>=4.0", "shap>=0.45"]
+dev = ["pytest>=8.0", "quantus>=0.5"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["shiftprofile*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --strict-markers"
