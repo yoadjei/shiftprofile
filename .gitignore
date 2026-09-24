@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Cache and results are reproducible artifacts, not source. The cache round-trips
+# through a versioned Kaggle Dataset; committing it to git would be both enormous
+# and the wrong provenance mechanism.
+cache/
+results/
+*.npy
+*.pt
+*.ckpt
+
+# Internal working documents: the source audit, planning notes, design drafts
+# and positioning analysis. They are input to this work rather than part of it.
+1.md
+*.local
+tasks/
+docs/superpowers/
+docs/p1-novelty-gate.md
