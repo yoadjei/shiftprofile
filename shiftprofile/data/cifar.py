@@ -121,6 +121,33 @@ def load_cifar10_train(root: Path | str, augmix: bool = False) -> torch.utils.da
     return dataset
 
 
+def _resolve_cifar10c_dir(root_path: Path) -> Path:
+    """Find the directory holding the corruption arrays, nested or flat.
+
+    The Zenodo tar extracts to a folder named `CIFAR-10-C`, so mounting that
+    folder gives `{root}/CIFAR-10-C/*.npy`. But a Kaggle Dataset built from the
+    loose files mounts them at `{root}/*.npy`, and the notebooks' own Zenodo
+    fallback flattens the folder away. Both layouts are reasonable and both
+    occur in practice.
+
+    Insisting on one of them turns a five-second upload choice into a failure
+    that only surfaces during the fill run, hours later and after the upload is
+    already paid for. So accept either, and say exactly what was looked for when
+    neither is present.
+    """
+    nested = root_path / "CIFAR-10-C"
+    if (nested / "labels.npy").exists():
+        return nested
+    if (root_path / "labels.npy").exists():
+        return root_path
+    raise FileNotFoundError(
+        f"no CIFAR-10-C data under {root_path}. Looked for labels.npy at "
+        f"{nested / 'labels.npy'} and {root_path / 'labels.npy'}. Either the "
+        f"dataset is not attached, or labels.npy was left out of the upload — "
+        f"it is required, because every corruption is scored against it."
+    )
+
+
 def load_cifar10c(
     root: Path | str,
     corruption: str,
@@ -149,13 +176,13 @@ def load_cifar10c(
     for family_corruptions in CORRUPTION_FAMILIES.values():
         valid_corruptions.extend(family_corruptions)
 
+
     if corruption not in valid_corruptions:
         raise ValueError(
             f"unknown corruption {corruption!r}. Available: {', '.join(sorted(valid_corruptions))}"
         )
 
-    root_path = Path(root)
-    cifar10c_dir = root_path / "CIFAR-10-C"
+    cifar10c_dir = _resolve_cifar10c_dir(Path(root))
 
     # Load the full corruption data (50000 rows, 5 severities stacked)
     corruption_file = cifar10c_dir / f"{corruption}.npy"
