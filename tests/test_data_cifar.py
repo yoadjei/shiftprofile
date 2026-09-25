@@ -267,3 +267,59 @@ def test_denormalise_produces_float():
 
     assert torch.is_tensor(denorm)
     assert denorm.dtype == torch.float32
+
+
+# ============================================================================
+# CIFAR-10-C layout tolerance
+#
+# The Zenodo tar extracts to a CIFAR-10-C/ folder, but a Kaggle Dataset built
+# from the loose files mounts them flat, and the setup notebook's own Zenodo
+# fallback flattens the folder away. The loader previously required the nested
+# form while the notebook's verification cell checked the flat one, so setup
+# would report success and the fill run would fail hours later.
+# ============================================================================
+
+
+def _write_corruption(directory, n=50000):
+    directory.mkdir(parents=True, exist_ok=True)
+    np.save(directory / "gaussian_noise.npy", np.zeros((n, 32, 32, 3), dtype=np.uint8))
+    np.save(directory / "labels.npy", np.arange(n, dtype=np.int64) % 10)
+
+
+def test_load_cifar10c_accepts_the_nested_layout(tmp_path):
+    """{root}/CIFAR-10-C/*.npy, as the Zenodo tar extracts it."""
+    _write_corruption(tmp_path / "CIFAR-10-C")
+    images, labels = load_cifar10c(tmp_path, "gaussian_noise", 1)
+    assert images.shape == (10000, 32, 32, 3)
+    assert labels.shape == (10000,)
+
+
+def test_load_cifar10c_accepts_the_flat_layout(tmp_path):
+    """{root}/*.npy, as a Kaggle Dataset of loose files mounts them."""
+    _write_corruption(tmp_path)
+    images, labels = load_cifar10c(tmp_path, "gaussian_noise", 1)
+    assert images.shape == (10000, 32, 32, 3)
+    assert labels.shape == (10000,)
+
+
+def test_load_cifar10c_prefers_nested_when_both_exist(tmp_path):
+    """An ambiguous mount resolves to one layout deterministically."""
+    _write_corruption(tmp_path / "CIFAR-10-C")
+    np.save(tmp_path / "labels.npy", np.zeros(50000, dtype=np.int64))
+    np.save(
+        tmp_path / "gaussian_noise.npy",
+        np.full((50000, 32, 32, 3), 7, dtype=np.uint8),
+    )
+
+    images, _ = load_cifar10c(tmp_path, "gaussian_noise", 1)
+    assert images.max() == 0, "nested layout should win over the flat one"
+
+
+def test_load_cifar10c_missing_data_names_both_paths(tmp_path):
+    """The error says where it looked, so a bad upload is diagnosable."""
+    with pytest.raises(FileNotFoundError) as exc:
+        load_cifar10c(tmp_path, "gaussian_noise", 1)
+
+    message = str(exc.value)
+    assert "CIFAR-10-C" in message
+    assert "labels.npy" in message
