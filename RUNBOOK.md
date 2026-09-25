@@ -71,13 +71,30 @@ Choose one of these two paths:
 
 #### Option A (Recommended): Upload CIFAR-10-C to Kaggle
 
-1. Download CIFAR-10-C locally from [Zenodo](https://zenodo.org/record/2535967)
-2. Create a **new Kaggle dataset** with the contents:
+Either layout works. `load_cifar10c` accepts the corruption arrays nested in a
+`CIFAR-10-C/` folder (as the Zenodo tar extracts them) or sitting flat at the top of the
+dataset, and says which paths it tried if it finds neither. Upload whichever is less
+effort.
+
+What it will **not** tolerate is a missing `labels.npy`. Every corruption is scored
+against it, so leaving it out breaks every cell.
+
+1. Download CIFAR-10-C from [Zenodo](https://zenodo.org/record/2535967) and extract it.
+   The tar produces a folder named `CIFAR-10-C`.
+2. Delete everything from that folder except the corruptions Version A uses, plus the
+   labels. Each file is ~147 MB, so this takes the upload from ~2.8 GB to ~735 MB:
+   ```
+   gaussian_noise.npy  shot_noise.npy  defocus_blur.npy
+   fog.npy  jpeg_compression.npy  labels.npy
+   ```
+   The pilot only reads `gaussian_noise`, `defocus_blur` and `fog`, but uploading the
+   five now avoids a second upload when the pilot passes. **Keep `labels.npy`** — every
+   corruption is scored against it.
+3. Create a **new Kaggle dataset**:
    - Name: `cifar-10-c`
-   - Description: "CIFAR-10 corrupted test set"
    - Visibility: Private
-   - Upload the extracted `.npy` files (gaussian_noise.npy, defocus_blur.npy, fog.npy, labels.npy)
-3. Publish and note the slug (e.g., `yoadjei/cifar-10-c`)
+   - Drag in the `CIFAR-10-C` folder, or its six files directly
+4. Publish and note the slug (e.g. `yoadjei/cifar-10-c`)
 
 #### Option B (Fallback): Download in notebook
 
