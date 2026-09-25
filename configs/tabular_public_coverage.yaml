@@ -1,0 +1,42 @@
+# Tabular track, ACS Public Coverage
+# 3 models x 10 seeds x (1 source + 8 target domains) = 270 cells, all CPU.
+#
+# Same grid as tabular_income so the two tasks are directly comparable: if a subgroup
+# gap widens with shift on one task and not the other, that difference is about the
+# task rather than about the design.
+#
+# Public Coverage is the harder of the two. It has 19 features against Income's 10, a
+# less balanced label, and stronger state-level policy effects - Medicaid expansion
+# differs by state, so a spatial shift here is partly a policy shift, not only a
+# demographic one. That confound is a finding to report, not a defect to hide.
+
+name: tabular_public_coverage
+track: tabular
+task: public_coverage
+
+source: CA_2018
+
+models:
+  - logreg
+  - xgboost
+  - mlp
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+shift_families:
+  - TX_2018          # non-expansion state: policy shift as well as demographic
+  - NY_2018
+  - FL_2018          # non-expansion state
+  - PR_2018
+  - SD_2018          # small state - tests the subgroup floor
+  - CA_2015          # temporal, pre-dates later policy change
+  - CA_2021
+  - PR_2021
+
+severities: [1]
+
+n_eval: 20000
+
+# Training rows from the source domain, disjoint from the 20k above. See
+# tabular_income.yaml for why that separation is load-bearing on this track.
+n_train: 50000
