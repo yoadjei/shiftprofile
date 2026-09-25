@@ -1,0 +1,50 @@
+# Tabular track, ACS Income
+# 3 models x 10 seeds x (1 source + 8 target domains) = 270 cells, all CPU.
+#
+# The severity axis is deliberately flat at 1. In the vision track severity is an
+# assigned dial; here the ladder is MEASURED. Domains are ordered after the fact by
+# domain-classifier AUC, because assigning an ordering in advance would bake into the
+# cache key the very thing the experiment is supposed to establish.
+
+name: tabular_income
+track: tabular
+task: income
+
+# Fitted on this domain; every target domain reuses the same weights.
+source: CA_2018
+
+models:
+  - logreg           # exact attributions: the faithfulness reference point
+  - xgboost          # exact TreeSHAP
+  - mlp              # KernelSHAP, ablation only (CPU-bound)
+
+# Ten seeds. The tabular track can afford twice the vision track's five because it
+# costs no GPU quota, and the subgroup estimates need the extra stability.
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# Target domains, chosen to span the shift range rather than to be geographically tidy.
+# PR and the year gaps are expected to be large shifts, TX/NY/FL moderate, SD a small
+# state that will stress the 200-row subgroup floor. Expected, not assumed: the
+# reported ordering is whatever the domain classifier measures.
+shift_families:
+  - TX_2018          # spatial, large state
+  - NY_2018          # spatial, large state
+  - FL_2018          # spatial, large state
+  - PR_2018          # spatial, expected largest shift
+  - SD_2018          # spatial, small state - tests the subgroup floor
+  - CA_2015          # temporal, backward
+  - CA_2021          # temporal, forward across the pandemic
+  - PR_2021          # spatial and temporal together
+
+severities: [1]
+
+# 20k rows per domain. Large enough that the major RAC1P groups clear the 200-row floor,
+# small enough that ten seeds of three model classes stay cheap on a laptop. Groups that
+# fall below the floor are reported as unreportable rather than dropped.
+n_eval: 20000
+
+# Training rows, drawn from the source domain only and disjoint from the 20k above.
+# The separation is not routine hygiene here: the source domain doubles as the clean
+# cell, the baseline every shifted cell is compared against, so an overlap would make
+# the baseline in-sample and produce a clean-to-shifted drop out of nothing.
+n_train: 50000
