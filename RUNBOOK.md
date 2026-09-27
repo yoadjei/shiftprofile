@@ -108,6 +108,26 @@ against it, so leaving it out breaks every cell.
 
 Each session follows this order: Setup → Fill → Report → Save.
 
+### The fastest way to run the setup check
+
+Notebook 00's checks are also a plain script, so the setup step needs no notebook
+import at all. In a blank Kaggle notebook with GPU on, Internet on, and both Datasets
+attached, paste one cell:
+
+```python
+!git clone --depth 1 https://github.com/yoadjei/shiftprofile.git /kaggle/working/shiftprofile
+!pip install -q -e /kaggle/working/shiftprofile
+!python /kaggle/working/shiftprofile/scripts/setup_check.py
+```
+
+It ends in `READY` or `NOT READY`, prints a specific fix under each failure, and exits
+non-zero when anything fails.
+
+> **Never paste the contents of a `.ipynb` into a cell.** A notebook file is JSON, so
+> the kernel reaches `execution_count: null` and raises
+> `NameError: name 'null' is not defined`. To use a notebook, download the raw file
+> from GitHub and import it with **File → Import Notebook**.
+
 ### Session 1: Setup and Run Pilot Fill
 
 #### Step 1: Create a Kaggle notebook
