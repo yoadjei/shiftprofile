@@ -121,7 +121,7 @@ def load_cifar10_train(root: Path | str, augmix: bool = False) -> torch.utils.da
     return dataset
 
 
-def _resolve_cifar10c_dir(root_path: Path) -> Path:
+def resolve_cifar10c_dir(root_path: Path) -> Path:
     """Find the directory holding the corruption arrays, nested or flat.
 
     The Zenodo tar extracts to a folder named `CIFAR-10-C`, so mounting that
@@ -182,7 +182,7 @@ def load_cifar10c(
             f"unknown corruption {corruption!r}. Available: {', '.join(sorted(valid_corruptions))}"
         )
 
-    cifar10c_dir = _resolve_cifar10c_dir(Path(root))
+    cifar10c_dir = resolve_cifar10c_dir(Path(root))
 
     # Load the full corruption data (50000 rows, 5 severities stacked)
     corruption_file = cifar10c_dir / f"{corruption}.npy"
