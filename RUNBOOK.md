@@ -115,13 +115,21 @@ import at all. In a blank Kaggle notebook with GPU on, Internet on, and both Dat
 attached, paste one cell:
 
 ```python
+!rm -rf /kaggle/working/shiftprofile
 !git clone --depth 1 https://github.com/yoadjei/shiftprofile.git /kaggle/working/shiftprofile
+!git -C /kaggle/working/shiftprofile log --oneline -1
 !pip install -q -e /kaggle/working/shiftprofile
 !python /kaggle/working/shiftprofile/scripts/setup_check.py
 ```
 
 It ends in `READY` or `NOT READY`, prints a specific fix under each failure, and exits
 non-zero when anything fails.
+
+The `rm -rf` is not decoration. `git clone` refuses to write into an existing
+directory, so on a second run it fails and leaves the first run's checkout in place —
+and the cell then runs against a version of the repo older than the one on GitHub. The
+`git log` line prints the commit actually checked out, which turns that class of
+confusion into one visible number.
 
 > **Never paste the contents of a `.ipynb` into a cell.** A notebook file is JSON, so
 > the kernel reaches `execution_count: null` and raises
