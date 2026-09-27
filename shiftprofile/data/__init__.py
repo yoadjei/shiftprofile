@@ -10,6 +10,7 @@ from .cifar import (
     load_cifar10_train,
     load_cifar10c,
     load_cell_images,
+    resolve_cifar10c_dir,
     to_normalised_tensor,
     denormalise,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "load_cifar10_train",
     "load_cifar10c",
     "load_cell_images",
+    "resolve_cifar10c_dir",
     "to_normalised_tensor",
     "denormalise",
 ]
