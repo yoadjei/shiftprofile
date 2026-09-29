@@ -55,8 +55,14 @@ def fixed_eval_indices(n: int, total: int = 10000, seed: int = 20260923) -> np.n
         raise ValueError(f"n ({n}) cannot exceed total ({total})")
 
     rng = np.random.RandomState(seed)
-    indices = rng.permutation(total)[:n]
-    return indices
+    # RandomState is the legacy generator, whose stream NumPy guarantees stable
+    # across versions and platforms, so the VALUES are reproducible anywhere.
+    # The dtype is not: permutation returns the platform's default integer, which
+    # is 32-bit on Windows and 64-bit on Linux. Identical indices therefore had
+    # different byte representations, which made any digest of them disagree
+    # between a laptop and a Kaggle runner and look like a reproducibility
+    # failure. Pin the width so the bytes are as portable as the values.
+    return rng.permutation(total)[:n].astype(np.int64)
 
 
 def load_cifar10_test(root: Path | str) -> Tuple[np.ndarray, np.ndarray]:
