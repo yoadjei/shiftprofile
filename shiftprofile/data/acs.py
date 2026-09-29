@@ -150,8 +150,10 @@ def eval_indices(n_rows: int, n_eval: int, *, seed: int = 0) -> np.ndarray:
     # Generate a permutation of all indices, take the first n_eval.
     # The nesting property holds because the first n_eval elements of
     # permutation(seed) are always a prefix of the first m elements for m > n_eval
-    indices = rng.permutation(n_rows)[:n_eval]
-    return indices
+    # int64 explicitly: permutation returns the platform's default integer width,
+    # 32-bit on Windows and 64-bit on Linux, so any digest of these indices would
+    # differ between machines even when the indices themselves match.
+    return rng.permutation(n_rows)[:n_eval].astype(np.int64)
 
 
 def train_indices(
@@ -203,7 +205,7 @@ def train_indices(
     if n_train is not None:
         remaining = remaining[:n_train]
 
-    return remaining
+    return remaining.astype(np.int64)
 
 
 # ============================================================================
