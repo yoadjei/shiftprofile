@@ -244,96 +244,146 @@ def fill(
     return report
 
 
+def _resolve_device(requested: str) -> str:
+    """Turn "auto" into what this machine actually has.
+
+    Neither fixed default is safe: "cpu" would silently run a GPU job on CPU for
+    hours, and "cuda" would crash on a laptop. "auto" decides, and the caller
+    prints the answer so the choice is on the record next to the timings.
+    """
+    if requested != "auto":
+        return requested
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point: python -m shiftprofile.fill [options]
 
     Example:
-        python -m shiftprofile.fill \\
-            --config configs/pilot.yaml \\
-            --budget-minutes 660 \\
-            --cache-write /kaggle/working/cache \\
-            --cache-read /kaggle/input/shiftprofile-cache \\
-            --device cuda
+        python -m shiftprofile.fill \
+            --config configs/pilot.yaml \
+            --budget-minutes 660 \
+            --cache-write /kaggle/working/cache \
+            --cache-read /kaggle/input/shiftprofile-cache \
+            --data-root /kaggle/working/data \
+            --corrupt-root /kaggle/input/cifar-10-c
     """
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Fill work list until budget runs out."
+        description="Fill the work list until the budget runs out."
+    )
+    parser.add_argument("--config", type=Path, required=True, help="Path to a config YAML")
+    parser.add_argument(
+        "--budget-minutes", type=float, required=True, help="Wall-clock budget in minutes"
+    )
+    parser.add_argument("--cache-write", type=Path, required=True, help="Writable cache root")
+    parser.add_argument(
+        "--cache-read", type=Path, action="append", default=[],
+        help="Read-only cache root; repeatable",
     )
     parser.add_argument(
-        "--config",
-        type=Path,
-        required=True,
-        help="Path to config YAML file",
+        "--data-root", type=Path, default=Path("data"),
+        help="CIFAR-10 root. Downloaded here if absent.",
     )
     parser.add_argument(
-        "--budget-minutes",
-        type=float,
-        required=True,
-        help="Time budget in minutes",
+        "--corrupt-root", type=Path, default=Path("data"),
+        help="CIFAR-10-C root, nested or flat",
     )
+    parser.add_argument("--device", default="auto", help="cpu, cuda, or auto (default)")
     parser.add_argument(
-        "--cache-write",
-        type=Path,
-        required=True,
-        help="Cache directory for writes",
-    )
-    parser.add_argument(
-        "--cache-read",
-        type=Path,
-        action="append",
-        default=[],
-        help="Read-only cache directory (repeatable)",
-    )
-    parser.add_argument(
-        "--device",
-        default="cpu",
-        help="Device to run on (default: cpu)",
-    )
-    parser.add_argument(
-        "--stages",
-        nargs="+",
-        default=["predict", "explain", "curves"],
-        help="Stages to run (default: predict explain curves)",
+        "--stages", nargs="+", default=["predict", "explain", "curves"],
+        help="Stages to run, in cost-ascending order",
     )
 
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
     cache = ArtifactCache(args.cache_write, read_roots=args.cache_read)
+    device = _resolve_device(args.device)
 
-    # Import the actual stage implementations
-    from .predict import predict_cell
-    from .explain import explain_cell
     from .curves import curves_cell
+    from .explain import explain_cell
+    from .predict import predict_cell
+    from .train import load_or_train
 
-    # Determine clean_root and corrupt_root from config or environment
-    # For now, use empty strings to trigger real data loading on Kaggle
-    clean_root = config.get("clean_root", "")
-    corrupt_root = config.get("corrupt_root", "")
+    # One trained model per (model_id, seed), held for the life of the process.
+    # Every stage of every shift cell sharing a model and seed needs the same
+    # weights, so without this load_or_train would deserialise the same
+    # checkpoint once per cell per stage.
+    models: dict[tuple[str, int], Any] = {}
 
-    stages_impl = {
-        "predict": lambda cell, cache, device="cpu", **kw: predict_cell(
-            cell, None, clean_root, corrupt_root, cache, device=device, **kw
-        ),
-        "explain": lambda cell, cache, device="cpu", explainer=None, **kw: explain_cell(
-            cell, None, clean_root, corrupt_root, cache,
+    def model_for(cell: Cell):
+        key = (cell.model_id, cell.seed)
+        if key not in models:
+            model, _ = load_or_train(
+                cell.model_id,
+                cell.seed,
+                args.data_root,
+                cache,
+                device=device,
+                epochs=config.get("epochs", 50),
+                batch_size=config.get("batch_size", 256),
+            )
+            models[key] = model
+        return models[key]
+
+    clean_root = str(args.data_root)
+    corrupt_root = str(args.corrupt_root)
+
+    def predict_stage(cell, cache, device="cpu", **kw):
+        return predict_cell(
+            cell, model_for(cell), clean_root, corrupt_root, cache, device=device, **kw
+        )
+
+    def explain_stage(cell, cache, device="cpu", explainer=None, **kw):
+        return explain_cell(
+            cell, model_for(cell), clean_root, corrupt_root, cache,
             explainer=explainer, device=device, **kw
-        ),
-        "curves": lambda cell, cache, device="cpu", explainer=None, imputation=None, **kw: curves_cell(
-            cell, None, clean_root, corrupt_root, cache,
+        )
+
+    def curves_stage(cell, cache, device="cpu", explainer=None, imputation=None, **kw):
+        return curves_cell(
+            cell, model_for(cell), clean_root, corrupt_root, cache,
             explainer=explainer, imputation=imputation, device=device, **kw
-        ),
-    }
+        )
+
+    print(f"config      {args.config}")
+    print(f"device      {device}")
+    print(f"budget      {args.budget_minutes:.0f} min")
+    print(f"cache write {args.cache_write}")
+    print(f"cache read  {', '.join(str(p) for p in args.cache_read) or '(none)'}")
+    print(f"data        {clean_root}")
+    print(f"corrupt     {corrupt_root}")
+    print(f"stages      {', '.join(args.stages)}")
+    print()
 
     report = fill(
         config,
         cache,
         budget_minutes=args.budget_minutes,
-        device=args.device,
+        device=device,
         stages=tuple(args.stages),
-        stages_impl=stages_impl,
+        stages_impl={
+            "predict": predict_stage,
+            "explain": explain_stage,
+            "curves": curves_stage,
+        },
+        progress=lambda stage, cell_id: print(f"  {stage}: {cell_id}", flush=True),
     )
 
+    print()
+    print("=" * 60)
     print(report.summary())
+    print("=" * 60)
     return 0 if not report.failed else 1
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())
