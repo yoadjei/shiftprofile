@@ -20,3 +20,9 @@ results/
 tasks/
 docs/superpowers/
 docs/p1-novelty-gate.md
+
+# Unrelated research projects that happen to share this working directory. The
+# repo root is a general preprints folder, so a stray `git add -A` would publish
+# them. Named explicitly rather than trusted to be noticed.
+/2/
+/3/
