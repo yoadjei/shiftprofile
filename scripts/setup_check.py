@@ -79,6 +79,63 @@ def check_clean_data(data_root: Path):
     return images, labels
 
 
+def _looks_like_cifar10c(directory: Path) -> bool:
+    """Does this directory, or a child of it, hold corruption arrays?"""
+    try:
+        if (directory / "labels.npy").exists():
+            return True
+        if (directory / "CIFAR-10-C" / "labels.npy").exists():
+            return True
+        return any(directory.glob("*.npy")) or any(directory.glob("*/*.npy"))
+    except OSError:
+        return False
+
+
+def _diagnose_missing_mount(base: Path = Path("/kaggle/input")) -> str:
+    """Say what IS attached, not just what is not.
+
+    The expected path is derived from the Dataset slug, so a Dataset named
+    anything other than `cifar-10-c` mounts somewhere else and the check fails
+    with a path the user never chose. Reporting only "does not exist" leaves
+    them guessing between "I forgot to attach it" and "I named it differently",
+    which are very different fixes. Listing the mounts distinguishes the two
+    immediately.
+    """
+    if not base.exists():
+        return (
+            f"no {base} on this machine, so nothing is mounted. Pass "
+            f"--corrupt-root pointing at a local CIFAR-10-C directory."
+        )
+
+    try:
+        mounts = sorted(p for p in base.iterdir() if p.is_dir())
+    except OSError as exc:
+        return f"could not read {base}: {exc}"
+
+    if not mounts:
+        return (
+            "nothing is attached to this notebook at all. Add Input -> your "
+            "cifar-10-c Dataset, then re-run."
+        )
+
+    candidates = [p for p in mounts if _looks_like_cifar10c(p)]
+    listing = ", ".join(p.name for p in mounts)
+
+    if candidates:
+        best = candidates[0]
+        return (
+            f"attached Datasets are: {listing}. {best.name} contains .npy files, "
+            f"so it is probably the one -- re-run with "
+            f"--corrupt-root {best}"
+        )
+
+    return (
+        f"attached Datasets are: {listing}. None of them contains .npy files, so "
+        f"the CIFAR-10-C Dataset is not attached to this notebook yet. Add Input "
+        f"-> select it, then re-run."
+    )
+
+
 def check_corrupt_data(corrupt_root: Path):
     print(f"\n[3/6] CIFAR-10-C under {corrupt_root}")
     from shiftprofile.data.cifar import resolve_cifar10c_dir
@@ -87,7 +144,7 @@ def check_corrupt_data(corrupt_root: Path):
         _fail(
             "corrupt",
             f"{corrupt_root} does not exist",
-            "attach the cifar-10-c Dataset via Add Input, or pass --corrupt-root",
+            _diagnose_missing_mount(),
         )
         return None
 
