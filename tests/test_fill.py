@@ -476,3 +476,109 @@ batch_size: 256
         # 3 models x 5 seeds x (1 clean + 5 shifts x 3 severities)
         # = 3 x 5 x (1 + 15) = 3 x 5 x 16 = 240
         assert len(cells) == 240, f"Expected 240 cells, got {len(cells)}"
+
+
+class TestCliWiresARealModel:
+    """The CLI must hand each stage a trained model.
+
+    `main` used to pass `None` as the model to every stage, so the documented
+    entry point -- the one in this module's own docstring and in the runbook --
+    could not complete a single uncached cell. It appeared to work only while
+    every artifact was already in the cache, which is exactly the condition a
+    smoke test on a warm cache would create.
+    """
+
+    def _config(self, tmp_path):
+        import yaml
+
+        cfg = {
+            "name": "cli_test",
+            "track": "vision",
+            "models": ["resnet18"],
+            "seeds": [0],
+            "shift_families": ["fog"],
+            "severities": [1],
+            "explainers": ["random"],
+            "imputation": "mean",
+            "n_eval_images": 8,
+            "epochs": 1,
+            "batch_size": 8,
+        }
+        path = tmp_path / "cli_test.yaml"
+        path.write_text(yaml.safe_dump(cfg))
+        return path
+
+    def test_stages_receive_the_trained_model_not_none(self, tmp_path, monkeypatch):
+        from shiftprofile.fill import main
+
+        sentinel = object()
+        seen_models = []
+        train_calls = []
+
+        def fake_load_or_train(model_id, seed, data_root, cache, **kw):
+            train_calls.append((model_id, seed))
+            return sentinel, {"model_id": model_id, "seed": seed}
+
+        def fake_predict_cell(cell, model, clean_root, corrupt_root, cache, **kw):
+            seen_models.append(model)
+            return np.zeros((8, 10), dtype=np.float32)
+
+        monkeypatch.setattr("shiftprofile.train.load_or_train", fake_load_or_train)
+        monkeypatch.setattr("shiftprofile.predict.predict_cell", fake_predict_cell)
+
+        rc = main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(tmp_path / "cache"),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu",
+            "--stages", "predict",
+        ])
+
+        assert rc == 0
+        assert train_calls, "the CLI never trained or loaded a model"
+        assert seen_models, "no cell reached the predict stage"
+        assert all(m is sentinel for m in seen_models), (
+            f"a stage received {seen_models!r} instead of the trained model; "
+            "passing None here is the defect this test exists to prevent"
+        )
+        assert None not in seen_models
+
+    def test_model_is_loaded_once_per_model_and_seed(self, tmp_path, monkeypatch):
+        """Two cells sharing a model and seed must not deserialise it twice."""
+        from shiftprofile.fill import main
+
+        train_calls = []
+
+        def fake_load_or_train(model_id, seed, data_root, cache, **kw):
+            train_calls.append((model_id, seed))
+            return object(), {}
+
+        monkeypatch.setattr("shiftprofile.train.load_or_train", fake_load_or_train)
+        monkeypatch.setattr(
+            "shiftprofile.predict.predict_cell",
+            lambda cell, model, clean_root, corrupt_root, cache, **kw: np.zeros((8, 10), np.float32),
+        )
+
+        main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(tmp_path / "cache"),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu",
+            "--stages", "predict",
+        ])
+
+        # The config yields two cells (clean plus one shift) on one model and seed.
+        assert train_calls == [("resnet18", 0)], (
+            f"expected one load for the single (model, seed); got {train_calls}"
+        )
+
+    def test_device_auto_resolves_without_torch_cuda(self, monkeypatch):
+        from shiftprofile.fill import _resolve_device
+
+        assert _resolve_device("cpu") == "cpu"
+        assert _resolve_device("cuda") == "cuda"
+        assert _resolve_device("auto") in ("cpu", "cuda")
