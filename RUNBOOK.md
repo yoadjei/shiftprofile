@@ -138,7 +138,7 @@ fill re-downloads CIFAR-10 — which has been observed to take 35 minutes at 80 
 Continue in the notebook where the setup check already fetched it:
 
 ```python
-!python -m shiftprofile.fill \
+!PYTHONPATH=/kaggle/working/shiftprofile python -m shiftprofile.fill \
   --config /kaggle/working/shiftprofile/configs/pilot.yaml \
   --budget-minutes 600 \
   --cache-write /kaggle/working/cache \
@@ -146,6 +146,12 @@ Continue in the notebook where the setup check already fetched it:
   --data-root /kaggle/working/data \
   --corrupt-root /kaggle/input/cifar-10-c
 ```
+
+Keep the `PYTHONPATH` prefix. `pip install -e` registers against one interpreter and a
+`!` line does not always resolve to that same one, so without it the command fails with
+`ModuleNotFoundError: No module named 'shiftprofile'` despite a successful install. The
+notebook bootstrap solves the same problem with `sys.path.insert`; this is its
+command-line equivalent.
 
 `--device` defaults to `auto` and prints what it resolved, so a GPU job cannot silently
 spend hours on CPU. Models are trained or loaded once per (model, seed) and held for the
