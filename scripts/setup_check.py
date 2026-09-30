@@ -24,6 +24,11 @@ from pathlib import Path
 
 FAILURES: list[str] = []
 
+# sha256 of fixed_eval_indices(1000) as little-endian int64, first 16 hex digits.
+# Pinned here and in tests/test_data_cifar.py: if the index stream ever changes,
+# both fail loudly rather than quietly scoring a different set of images.
+EXPECTED_INDEX_CHECKSUM = "60c5b821cd131d37"
+
 
 def _ok(msg: str) -> None:
     print(f"  OK    {msg}")
@@ -158,14 +163,33 @@ def check_alignment(clean, corrupt_dir: Path) -> None:
 
 
 def check_indices() -> None:
+    """Verify the evaluation set is the same one every other machine will use.
+
+    The digest is taken over a canonical byte layout, little-endian int64, not
+    over whatever the platform's default integer happens to be. NumPy's default
+    int is 32-bit on Windows and 64-bit on Linux, so hashing the raw buffer made
+    identical indices digest differently on a laptop and on a Kaggle runner --
+    a check meant to catch a real mismatch reporting a fake one.
+    """
     print("\n[5/6] Evaluation indices")
+    import numpy as np
+
     from shiftprofile.data import fixed_eval_indices
 
     idx = fixed_eval_indices(1000)
-    checksum = hashlib.sha256(idx.tobytes()).hexdigest()[:16]
-    _ok(f"n=1000, checksum {checksum}, range [{idx.min()}, {idx.max()}]")
-    print("        Record this. A different checksum on another machine means a")
-    print("        different evaluation set, and the numbers are not comparable.")
+    canonical = np.asarray(idx, dtype="<i8").tobytes()
+    checksum = hashlib.sha256(canonical).hexdigest()[:16]
+
+    print(f"  n=1000, range [{idx.min()}, {idx.max()}], first five {idx[:5].tolist()}")
+    if checksum == EXPECTED_INDEX_CHECKSUM:
+        _ok(f"checksum {checksum} matches the committed value")
+    else:
+        _fail(
+            "indices",
+            f"checksum {checksum} != expected {EXPECTED_INDEX_CHECKSUM}",
+            "the evaluation set differs from every other run - stop and report this, "
+            "because results computed here would not be comparable",
+        )
 
 
 def check_cache(cache_dir: Path) -> None:
