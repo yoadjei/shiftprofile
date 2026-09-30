@@ -1,5 +1,6 @@
 """Tests for CIFAR-10 and CIFAR-10-C data loaders."""
 
+import hashlib
 import numpy as np
 import pytest
 import torch
@@ -43,7 +44,7 @@ def test_fixed_indices_are_nested_across_sizes():
 def test_fixed_indices_are_valid():
     """Fixed indices must be unique integers in [0, 10000)."""
     indices = fixed_eval_indices(1000)
-    assert indices.dtype in [np.int32, np.int64]
+    assert indices.dtype == np.int64, "dtype must be pinned: a platform-dependent width makes any digest of these indices differ between machines"
     assert len(np.unique(indices)) == 1000
     assert indices.min() >= 0
     assert indices.max() < 10000
@@ -323,3 +324,55 @@ def test_load_cifar10c_missing_data_names_both_paths(tmp_path):
     message = str(exc.value)
     assert "CIFAR-10-C" in message
     assert "labels.npy" in message
+
+
+# ============================================================================
+# Evaluation index portability
+#
+# The indices decide which images every cell is scored on, so a machine that
+# generates a different set produces numbers that cannot be compared with any
+# other run. RandomState guarantees the VALUES across platforms; the dtype is
+# not guaranteed, and hashing the raw buffer once made a Windows laptop and a
+# Linux runner disagree over identical indices.
+# ============================================================================
+
+EXPECTED_INDEX_CHECKSUM = "60c5b821cd131d37"
+
+
+def _canonical_checksum(indices):
+    """Digest over little-endian int64, independent of platform int width."""
+    return hashlib.sha256(np.asarray(indices, dtype="<i8").tobytes()).hexdigest()[:16]
+
+
+def test_fixed_eval_indices_checksum_is_pinned():
+    """The index stream must not drift. Pinned in scripts/setup_check.py too."""
+    assert _canonical_checksum(fixed_eval_indices(1000)) == EXPECTED_INDEX_CHECKSUM
+
+
+def test_fixed_eval_indices_dtype_is_platform_independent():
+    idx = fixed_eval_indices(1000)
+    assert idx.dtype == np.int64
+    assert idx.nbytes == 1000 * 8
+
+
+def test_canonical_checksum_survives_a_dtype_round_trip():
+    """The digest must depend on the values, not on how they are stored.
+
+    This is the actual regression: the same indices viewed as int32 and int64
+    hash differently unless canonicalised, which is what made a correct Kaggle
+    run look like a reproducibility failure.
+    """
+    idx = fixed_eval_indices(500)
+    as_int32 = idx.astype(np.int32)
+    as_int64 = idx.astype(np.int64)
+
+    assert np.array_equal(as_int32, as_int64), "values must be unchanged by the cast"
+    assert _canonical_checksum(as_int32) == _canonical_checksum(as_int64)
+
+    # And the naive digest is exactly what it must not be: storage-dependent.
+    naive_32 = hashlib.sha256(as_int32.tobytes()).hexdigest()
+    naive_64 = hashlib.sha256(as_int64.tobytes()).hexdigest()
+    assert naive_32 != naive_64, (
+        "if these ever match, the platform stopped distinguishing int widths and "
+        "this test no longer guards anything"
+    )
