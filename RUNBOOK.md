@@ -138,20 +138,20 @@ fill re-downloads CIFAR-10 — which has been observed to take 35 minutes at 80 
 Continue in the notebook where the setup check already fetched it:
 
 ```python
-!PYTHONPATH=/kaggle/working/shiftprofile python -m shiftprofile.fill \
-  --config /kaggle/working/shiftprofile/configs/pilot.yaml \
-  --budget-minutes 600 \
-  --cache-write /kaggle/working/cache \
-  --cache-read /kaggle/input/shiftprofile-cache \
-  --data-root /kaggle/working/data \
-  --corrupt-root /kaggle/input/cifar-10-c
+!python /kaggle/working/shiftprofile/scripts/run_fill.py
 ```
 
-Keep the `PYTHONPATH` prefix. `pip install -e` registers against one interpreter and a
-`!` line does not always resolve to that same one, so without it the command fails with
-`ModuleNotFoundError: No module named 'shiftprofile'` despite a successful install. The
-notebook bootstrap solves the same problem with `sys.path.insert`; this is its
-command-line equivalent.
+The Kaggle paths are the script's defaults; pass a flag to override any of them, and an
+explicit value beats the default. `--cache-read` is added only when the cache Dataset is
+actually attached, so a first session with nothing to resume from is not confused with a
+typo in the slug.
+
+**Do not use `python -m shiftprofile.fill` on Kaggle.** It fails with
+`ModuleNotFoundError: No module named 'shiftprofile'` with or without `PYTHONPATH`:
+`pip install -e` registers against one interpreter and the one a `!` line resolves to
+need not be the same, and `-m` is the form that depends on getting that right. Invoking
+a script by path does work, so `run_fill.py` sets `sys.path` from its own location and
+calls the same `main()`. The `-m` form remains fine locally.
 
 `--device` defaults to `auto` and prints what it resolved, so a GPU job cannot silently
 spend hours on CPU. Models are trained or loaded once per (model, seed) and held for the
