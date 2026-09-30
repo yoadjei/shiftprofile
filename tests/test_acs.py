@@ -179,7 +179,7 @@ def test_eval_indices_returns_ndarray():
 def test_eval_indices_returns_integers():
     """eval_indices must return integer dtype."""
     result = eval_indices(1000, 100, seed=0)
-    assert result.dtype in [np.int32, np.int64]
+    assert result.dtype == np.int64, "dtype must be pinned so digests are portable"
 
 
 # ============================================================================
