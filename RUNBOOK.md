@@ -131,6 +131,28 @@ and the cell then runs against a version of the repo older than the one on GitHu
 `git log` line prints the commit actually checked out, which turns that class of
 confusion into one visible number.
 
+### Run the fill in the same notebook
+
+`/kaggle/working` does not survive between notebooks, so opening a fresh one for the
+fill re-downloads CIFAR-10 — which has been observed to take 35 minutes at 80 kB/s.
+Continue in the notebook where the setup check already fetched it:
+
+```python
+!python -m shiftprofile.fill \
+  --config /kaggle/working/shiftprofile/configs/pilot.yaml \
+  --budget-minutes 600 \
+  --cache-write /kaggle/working/cache \
+  --cache-read /kaggle/input/shiftprofile-cache \
+  --data-root /kaggle/working/data \
+  --corrupt-root /kaggle/input/cifar-10-c
+```
+
+`--device` defaults to `auto` and prints what it resolved, so a GPU job cannot silently
+spend hours on CPU. Models are trained or loaded once per (model, seed) and held for the
+process rather than deserialised per cell.
+
+Then **Save Version**, or the cache dies with the session.
+
 > **Never paste the contents of a `.ipynb` into a cell.** A notebook file is JSON, so
 > the kernel reaches `execution_count: null` and raises
 > `NameError: name 'null' is not defined`. To use a notebook, download the raw file
