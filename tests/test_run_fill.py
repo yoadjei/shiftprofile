@@ -90,3 +90,45 @@ def test_explicit_cache_read_is_respected(runner, monkeypatch):
     argv = runner.build_argv(["--cache-read", "/somewhere/else"])
     assert argv.count("--cache-read") == 1
     assert argv[argv.index("--cache-read") + 1] == "/somewhere/else"
+
+
+class TestCorruptRootDiscovery:
+    """The corruption root is found, not typed.
+
+    Its conventional path comes from a Kaggle Dataset slug, so a Dataset named
+    anything else moves the mount. Making the user retype a slug they have to
+    look up is a worse answer than reading the attached Datasets.
+    """
+
+    def test_corrupt_root_is_always_supplied(self, runner):
+        argv = runner.build_argv([])
+        assert "--corrupt-root" in argv, "fill requires it; the default must be filled in"
+
+    def test_explicit_corrupt_root_wins_and_is_not_duplicated(self, runner):
+        argv = runner.build_argv(["--corrupt-root", "/my/own/path"])
+        assert argv.count("--corrupt-root") == 1
+        assert argv[argv.index("--corrupt-root") + 1] == "/my/own/path"
+
+    def test_conventional_path_is_preferred_when_it_exists(self, runner, monkeypatch):
+        monkeypatch.setattr(runner.Path, "exists", lambda self: True)
+        assert runner.resolve_corrupt_root() == runner.CONVENTIONAL_CORRUPT_ROOT
+
+    def test_discovery_is_used_when_the_conventional_path_is_absent(
+        self, runner, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(runner.Path, "exists", lambda self: False)
+        monkeypatch.setattr(
+            "shiftprofile.data.discover_cifar10c_root", lambda *a, **k: tmp_path / "found"
+        )
+        monkeypatch.setattr(runner, "discover_cifar10c_root", lambda *a, **k: tmp_path / "found")
+
+        assert runner.resolve_corrupt_root() == str(tmp_path / "found")
+
+    def test_falls_back_to_the_conventional_path_when_nothing_is_found(
+        self, runner, monkeypatch
+    ):
+        """So the error names something recognisable rather than nothing."""
+        monkeypatch.setattr(runner.Path, "exists", lambda self: False)
+        monkeypatch.setattr(runner, "discover_cifar10c_root", lambda *a, **k: None)
+
+        assert runner.resolve_corrupt_root() == runner.CONVENTIONAL_CORRUPT_ROOT
