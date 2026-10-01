@@ -33,7 +33,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from shiftprofile.data import discover_cifar10c_root  # noqa: E402
 from shiftprofile.fill import main  # noqa: E402  (needs sys.path set first)
+
+CONVENTIONAL_CORRUPT_ROOT = "/kaggle/input/cifar-10-c"
 
 # Defaults applied only when the flag is absent from the command line.
 DEFAULTS: list[tuple[str, str]] = [
@@ -41,7 +44,6 @@ DEFAULTS: list[tuple[str, str]] = [
     ("--budget-minutes", "600"),
     ("--cache-write", "/kaggle/working/cache"),
     ("--data-root", "/kaggle/working/data"),
-    ("--corrupt-root", "/kaggle/input/cifar-10-c"),
 ]
 
 # Added only if it exists. A read root that is not there is not an error -- the
@@ -50,12 +52,34 @@ DEFAULTS: list[tuple[str, str]] = [
 OPTIONAL_READ_ROOT = "/kaggle/input/shiftprofile-cache"
 
 
+def resolve_corrupt_root() -> str:
+    """Where CIFAR-10-C is, without the user having to know the Dataset slug.
+
+    Prefers the conventional path, then searches the attached Datasets for one
+    that actually holds the arrays. Falls back to the conventional path so the
+    error message names something recognisable rather than nothing at all.
+    """
+    # Returned verbatim rather than round-tripped through Path, which would
+    # rewrite the separators on Windows and make a local run's output differ
+    # from the path that was actually configured.
+    if Path(CONVENTIONAL_CORRUPT_ROOT).exists():
+        return CONVENTIONAL_CORRUPT_ROOT
+
+    found = discover_cifar10c_root()
+    if found is not None:
+        return str(found)
+
+    return CONVENTIONAL_CORRUPT_ROOT
+
+
 def build_argv(argv: list[str]) -> list[str]:
     """Fill in defaults for flags the caller did not pass."""
     out = list(argv)
     for flag, value in DEFAULTS:
         if flag not in out:
             out += [flag, value]
+    if "--corrupt-root" not in out:
+        out += ["--corrupt-root", resolve_corrupt_root()]
     if "--cache-read" not in out and Path(OPTIONAL_READ_ROOT).exists():
         out += ["--cache-read", OPTIONAL_READ_ROOT]
     return out
