@@ -146,6 +146,12 @@ explicit value beats the default. `--cache-read` is added only when the cache Da
 actually attached, so a first session with nothing to resume from is not confused with a
 typo in the slug.
 
+The CIFAR-10-C Dataset's name does not matter. When `/kaggle/input/cifar-10-c` is absent,
+both this script and `setup_check.py` scan the attached Datasets and use whichever holds
+`labels.npy`, nested or flat. The conventional path is only a first guess, because the
+mount is derived from a Dataset slug and insisting on one spelling turns a naming choice
+into a failure.
+
 **Do not use `python -m shiftprofile.fill` on Kaggle.** It fails with
 `ModuleNotFoundError: No module named 'shiftprofile'` with or without `PYTHONPATH`:
 `pip install -e` registers against one interpreter and the one a `!` line resolves to
