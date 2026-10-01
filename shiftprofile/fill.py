@@ -317,9 +317,30 @@ def main(argv: Optional[list[str]] = None) -> int:
     # checkpoint once per cell per stage.
     models: dict[tuple[str, int], Any] = {}
 
+    def training_progress(epoch: int, total: int, metrics: dict) -> None:
+        """Report during training, which is the long silent stretch of a session.
+
+        Fifty epochs produce no output at all otherwise, and on a preemptible
+        runner a silent cell is indistinguishable from a hung one — which invites
+        killing a run by hand twenty minutes into work that was fine. Every fifth
+        epoch is frequent enough to show liveness without burying the per-cell
+        lines that follow.
+        """
+        if epoch % 5 == 0 or epoch == total or epoch == 1:
+            loss = metrics.get("loss")
+            suffix = f", loss {loss:.4f}" if isinstance(loss, (int, float)) else ""
+            print(f"    epoch {epoch}/{total}{suffix}", flush=True)
+
     def model_for(cell: Cell):
         key = (cell.model_id, cell.seed)
         if key not in models:
+            # Say so before the silence, not after it. A cache hit returns at once
+            # and prints nothing more; a miss trains, and the reader needs to know
+            # which of the two is happening.
+            print(
+                f"  model {cell.model_id} seed {cell.seed}: loading from cache or training",
+                flush=True,
+            )
             model, _ = load_or_train(
                 cell.model_id,
                 cell.seed,
@@ -328,6 +349,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 device=device,
                 epochs=config.get("epochs", 50),
                 batch_size=config.get("batch_size", 256),
+                progress=training_progress,
             )
             models[key] = model
         return models[key]
