@@ -582,3 +582,93 @@ class TestCliWiresARealModel:
         assert _resolve_device("cpu") == "cpu"
         assert _resolve_device("cuda") == "cuda"
         assert _resolve_device("auto") in ("cpu", "cuda")
+
+
+class TestTrainingIsNotSilent:
+    """Training must report progress through the CLI.
+
+    train_model has always accepted a `progress` callback, but the CLI did not
+    pass one, so fifty epochs produced no output. On a preemptible runner a
+    silent cell cannot be told apart from a hung one, which invites killing a
+    healthy run by hand. Version A trains fifteen models, so the silence would
+    have been measured in hours.
+    """
+
+    def _config(self, tmp_path):
+        import yaml
+
+        cfg = {
+            "name": "progress_test",
+            "track": "vision",
+            "models": ["resnet18"],
+            "seeds": [0],
+            "shift_families": ["fog"],
+            "severities": [1],
+            "explainers": ["random"],
+            "imputation": "mean",
+            "n_eval_images": 8,
+            "epochs": 20,
+            "batch_size": 8,
+        }
+        path = tmp_path / "progress_test.yaml"
+        path.write_text(yaml.safe_dump(cfg))
+        return path
+
+    def _run(self, tmp_path, monkeypatch, capsync):
+        from shiftprofile.fill import main
+
+        captured = {}
+
+        def fake_load_or_train(model_id, seed, data_root, cache, **kw):
+            captured["progress"] = kw.get("progress")
+            # Drive the callback the way train_model does, so the test exercises
+            # the real reporting path rather than merely its presence.
+            cb = kw.get("progress")
+            if cb is not None:
+                total = kw.get("epochs", 20)
+                for epoch in range(1, total + 1):
+                    cb(epoch, total, {"loss": 1.0 / epoch})
+            return object(), {}
+
+        monkeypatch.setattr("shiftprofile.train.load_or_train", fake_load_or_train)
+        monkeypatch.setattr(
+            "shiftprofile.predict.predict_cell",
+            lambda cell, model, clean_root, corrupt_root, cache, **kw: np.zeros((8, 10), np.float32),
+        )
+
+        main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(tmp_path / "cache"),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu",
+            "--stages", "predict",
+        ])
+        return captured, capsync.readouterr().out
+
+    def test_a_progress_callback_is_passed(self, tmp_path, monkeypatch, capsys):
+        captured, _ = self._run(tmp_path, monkeypatch, capsys)
+        assert callable(captured["progress"]), (
+            "the CLI must pass a progress callback, or training runs silent"
+        )
+
+    def test_epochs_are_reported(self, tmp_path, monkeypatch, capsys):
+        _, out = self._run(tmp_path, monkeypatch, capsys)
+        assert "epoch 1/20" in out, "the first epoch must report, to prove liveness early"
+        assert "epoch 20/20" in out, "the last epoch must report"
+        assert "loss" in out
+
+    def test_reporting_is_throttled_not_per_epoch(self, tmp_path, monkeypatch, capsys):
+        """Frequent enough to show liveness, sparse enough not to bury the cells."""
+        _, out = self._run(tmp_path, monkeypatch, capsys)
+        lines = [l for l in out.splitlines() if "epoch " in l]
+        assert 0 < len(lines) < 20, f"expected throttled output, got {len(lines)} lines"
+
+    def test_the_model_step_announces_itself_before_the_silence(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        _, out = self._run(tmp_path, monkeypatch, capsys)
+        assert "model resnet18 seed 0" in out, (
+            "a reader needs to know a model step started before it goes quiet"
+        )
