@@ -169,8 +169,11 @@ def holds_cifar10c(directory: Path) -> bool:
         return False
 
 
-def discover_cifar10c_root(base: Path | str = Path("/kaggle/input")) -> Optional[Path]:
-    """Find an attached dataset that holds CIFAR-10-C, or None.
+def discover_cifar10c_root(
+    base: Path | str = Path("/kaggle/input"),
+    max_depth: int = 5,
+) -> Optional[Path]:
+    """Find a directory that can be passed as `corrupt_root`, or None.
 
     The conventional path is derived from a Kaggle Dataset slug, so naming the
     Dataset anything other than `cifar-10-c` moves the mount and every default
@@ -178,23 +181,101 @@ def discover_cifar10c_root(base: Path | str = Path("/kaggle/input")) -> Optional
     is to retype a slug they have to go and look up — which is a poor trade for
     information already sitting on disk.
 
-    Returns the dataset directory, the one to pass as `corrupt_root`, not the
-    inner arrays directory; `resolve_cifar10c_dir` handles that second step.
-    Scans in sorted order so the choice is deterministic when two candidates
-    are attached.
+    Searches for `labels.npy` rather than for a directory name, and returns its
+    parent. An earlier version only looked one level below each dataset, which
+    missed a real mount: uploading a folder leaves the arrays at
+    `<dataset>/<folder>/CIFAR-10-C/`, three levels down, and the dataset then
+    reported as containing nothing. Depth is bounded because `/kaggle/input` can
+    hold large unrelated datasets and this runs before any work starts.
+
+    Returning the parent of `labels.npy` is correct for either layout:
+    `resolve_cifar10c_dir` finds the arrays beside the labels in both cases.
+    Traversal is breadth-first in sorted order, so the shallowest match wins and
+    the choice is deterministic when several are attached.
     """
     base = Path(base)
-    try:
-        if not base.exists():
-            return None
-        children = sorted(p for p in base.iterdir() if p.is_dir())
-    except OSError:
+    if not base.exists():
         return None
 
-    for child in children:
-        if holds_cifar10c(child):
-            return child
+    frontier = [base]
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        next_frontier: list[Path] = []
+        for directory in frontier:
+            try:
+                if (directory / "labels.npy").exists():
+                    return directory
+                next_frontier.extend(
+                    sorted(p for p in directory.iterdir() if p.is_dir())
+                )
+            except OSError:
+                continue
+        frontier = next_frontier
+
     return None
+
+
+MOUNT_LISTING_MAX_LINES = 40
+MOUNT_LISTING_FILES_PER_DIR = 6
+
+
+def describe_mounts(base: Path | str = Path("/kaggle/input"), max_depth: int = 3) -> list[str]:
+    """A short listing of what is actually mounted, for error messages.
+
+    Reporting "none of the attached datasets contains .npy files" tells the
+    reader nothing they can act on — a real session got exactly that while the
+    arrays sat two levels further down than the message implied. Showing the
+    tree distinguishes the cases that matter: the upload is empty, it is still
+    processing, or it is nested deeper than expected. Three different fixes.
+
+    Every directory prints something, even when it has no children, because a
+    bare name with nothing under it would otherwise be ambiguous between an
+    empty upload and a depth cut-off. Both the depth and the total line count
+    are bounded: `/kaggle/input` can hold unrelated datasets of any size, and
+    this runs inside an error message.
+    """
+    base = Path(base)
+    if not base.exists():
+        return [f"{base} does not exist"]
+
+    lines: list[str] = []
+
+    def walk(directory: Path, depth: int) -> None:
+        if len(lines) >= MOUNT_LISTING_MAX_LINES:
+            return
+        pad = "  " * depth
+        try:
+            entries = sorted(directory.iterdir())
+        except OSError as exc:
+            lines.append(f"{pad}(unreadable: {exc.strerror})")
+            return
+        if not entries:
+            lines.append(f"{pad}(empty)")
+            return
+        if depth > max_depth:
+            lines.append(f"{pad}({len(entries)} more entries, not shown)")
+            return
+
+        for child in entries:
+            if child.is_dir():
+                if len(lines) >= MOUNT_LISTING_MAX_LINES:
+                    return
+                lines.append(f"{pad}{child.name}/")
+                walk(child, depth + 1)
+
+        files = [p for p in entries if not p.is_dir()]
+        for child in files[:MOUNT_LISTING_FILES_PER_DIR]:
+            if len(lines) >= MOUNT_LISTING_MAX_LINES:
+                return
+            lines.append(f"{pad}{child.name}")
+        if len(files) > MOUNT_LISTING_FILES_PER_DIR:
+            lines.append(f"{pad}... and {len(files) - MOUNT_LISTING_FILES_PER_DIR} more files")
+
+    walk(base, 0)
+    if len(lines) >= MOUNT_LISTING_MAX_LINES:
+        lines.append(f"... truncated at {MOUNT_LISTING_MAX_LINES} lines")
+    return lines
 
 
 def load_cifar10c(
