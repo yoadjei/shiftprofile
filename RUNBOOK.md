@@ -146,11 +146,17 @@ explicit value beats the default. `--cache-read` is added only when the cache Da
 actually attached, so a first session with nothing to resume from is not confused with a
 typo in the slug.
 
-The CIFAR-10-C Dataset's name does not matter. When `/kaggle/input/cifar-10-c` is absent,
-both this script and `setup_check.py` scan the attached Datasets and use whichever holds
-`labels.npy`, nested or flat. The conventional path is only a first guess, because the
-mount is derived from a Dataset slug and insisting on one spelling turns a naming choice
-into a failure.
+The CIFAR-10-C Dataset's name does not matter, and neither does how deeply the arrays sit
+inside it. When `/kaggle/input/cifar-10-c` is absent, both this script and
+`setup_check.py` search the mounts for `labels.npy` — breadth-first, five levels down —
+and use the directory holding it. Uploading a folder rather than its contents is the
+common case: the arrays land at `<dataset>/<folder>/CIFAR-10-C/`, and that is fine. The
+conventional path is only a first guess, because the mount is derived from a Dataset slug
+and insisting on one spelling turns a naming choice into a failure.
+
+If the check still cannot find the data, its failure message prints the mount tree. Read
+it before changing anything: an upload still processing shows as `(empty)`, and arrays
+without `labels.npy` are named as such, and those are different fixes.
 
 **Do not use `python -m shiftprofile.fill` on Kaggle.** It fails with
 `ModuleNotFoundError: No module named 'shiftprofile'` with or without `PYTHONPATH`:
