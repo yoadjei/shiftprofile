@@ -154,6 +154,49 @@ def resolve_cifar10c_dir(root_path: Path) -> Path:
     )
 
 
+def holds_cifar10c(directory: Path) -> bool:
+    """Whether this directory, or a `CIFAR-10-C` child of it, holds the arrays.
+
+    Keyed on `labels.npy` rather than on any corruption file. Every corruption
+    is scored against those labels, so a directory without them is unusable no
+    matter how many `.npy` files it contains.
+    """
+    try:
+        return (directory / "labels.npy").exists() or (
+            directory / "CIFAR-10-C" / "labels.npy"
+        ).exists()
+    except OSError:
+        return False
+
+
+def discover_cifar10c_root(base: Path | str = Path("/kaggle/input")) -> Optional[Path]:
+    """Find an attached dataset that holds CIFAR-10-C, or None.
+
+    The conventional path is derived from a Kaggle Dataset slug, so naming the
+    Dataset anything other than `cifar-10-c` moves the mount and every default
+    misses it. The failure then names a path the user never chose, and the fix
+    is to retype a slug they have to go and look up — which is a poor trade for
+    information already sitting on disk.
+
+    Returns the dataset directory, the one to pass as `corrupt_root`, not the
+    inner arrays directory; `resolve_cifar10c_dir` handles that second step.
+    Scans in sorted order so the choice is deterministic when two candidates
+    are attached.
+    """
+    base = Path(base)
+    try:
+        if not base.exists():
+            return None
+        children = sorted(p for p in base.iterdir() if p.is_dir())
+    except OSError:
+        return None
+
+    for child in children:
+        if holds_cifar10c(child):
+            return child
+    return None
+
+
 def load_cifar10c(
     root: Path | str,
     corruption: str,
