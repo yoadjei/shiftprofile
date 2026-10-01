@@ -58,6 +58,24 @@ def test_datasets_attached_but_none_hold_arrays(check, tmp_path):
     assert "not attached to this notebook yet" in message
 
 
+def test_the_message_shows_the_tree_not_just_the_dataset_names(check, tmp_path):
+    """The gap a real session fell into.
+
+    It reported "attached Datasets are: datasets. None of them contains .npy
+    files" when there was a folder of CSVs inside. Naming a directory without
+    showing its contents left the user nothing to act on.
+    """
+    base = tmp_path / "input"
+    inner = base / "datasets" / "something-else"
+    inner.mkdir(parents=True)
+    (inner / "train.csv").write_text("a,b\n1,2\n")
+
+    message = check._diagnose_missing_mount(base)
+    assert "datasets/" in message
+    assert "something-else/" in message
+    assert "train.csv" in message
+
+
 def test_dataset_attached_under_a_different_slug_is_suggested(check, tmp_path):
     """The case a bare 'does not exist' cannot distinguish."""
     base = tmp_path / "input"
@@ -65,9 +83,8 @@ def test_dataset_attached_under_a_different_slug_is_suggested(check, tmp_path):
     _corruption_dir(base / "cifar10-c-corrupted" / "CIFAR-10-C")
 
     message = check._diagnose_missing_mount(base)
-    assert "cifar10-c-corrupted" in message
     assert "--corrupt-root" in message
-    assert str(base / "cifar10-c-corrupted") in message
+    assert "cifar10-c-corrupted" in message
 
 
 def test_flat_layout_is_also_recognised(check, tmp_path):
@@ -79,22 +96,35 @@ def test_flat_layout_is_also_recognised(check, tmp_path):
     assert "--corrupt-root" in message
 
 
-def test_looks_like_cifar10c_rejects_an_unrelated_dataset(check, tmp_path):
-    unrelated = tmp_path / "some-csv-dataset"
-    unrelated.mkdir()
-    (unrelated / "train.csv").write_text("a,b\n1,2\n")
+def test_arrays_nested_deep_are_found_and_the_path_given(check, tmp_path):
+    """Uploading a folder puts the arrays three levels down, and that is fine."""
+    base = tmp_path / "input"
+    _corruption_dir(base / "datasets" / "cifar10c" / "CIFAR-10-C")
 
-    assert not check._looks_like_cifar10c(unrelated)
+    message = check._diagnose_missing_mount(base)
+    assert "--corrupt-root" in message
+    suggested = Path(message.split("--corrupt-root")[1].strip())
+    assert (suggested / "labels.npy").exists() or (
+        suggested / "CIFAR-10-C" / "labels.npy"
+    ).exists(), f"suggested {suggested} is not usable as a corruption root"
 
 
-def test_looks_like_cifar10c_accepts_both_layouts(check, tmp_path):
-    nested = tmp_path / "nested"
-    _corruption_dir(nested / "CIFAR-10-C")
-    flat = tmp_path / "flat"
-    _corruption_dir(flat)
+def test_arrays_present_but_labels_missing_names_that_specifically(check, tmp_path):
+    """A distinguishable mistake, and not the same fix as a missing Dataset.
 
-    assert check._looks_like_cifar10c(nested)
-    assert check._looks_like_cifar10c(flat)
+    Every corruption is scored against labels.npy, so an upload without it is
+    unusable -- but reporting "not attached" would send the user looking for a
+    Dataset that is right there.
+    """
+    base = tmp_path / "input"
+    arrays = base / "cifar10c" / "CIFAR-10-C"
+    arrays.mkdir(parents=True)
+    np.save(arrays / "gaussian_noise.npy", np.zeros((10, 2), dtype=np.uint8))
+
+    message = check._diagnose_missing_mount(base)
+    assert "labels.npy" in message
+    assert "not attached" not in message
+    assert str(arrays) in message
 
 
 def test_expected_checksum_matches_the_library(check):
