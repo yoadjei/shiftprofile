@@ -5,7 +5,9 @@ import numpy as np
 import pytest
 import torch
 from pathlib import Path
+from shiftprofile.data import cifar as cifar_module
 from shiftprofile.data.cifar import (
+    describe_mounts,
     discover_cifar10c_root,
     holds_cifar10c,
     resolve_cifar10c_dir,
@@ -438,27 +440,64 @@ def test_discover_ignores_unrelated_datasets(tmp_path):
 
 
 def test_discover_finds_an_oddly_named_dataset(tmp_path):
-    """The case this function exists for."""
+    """The case this function exists for: the slug is not `cifar-10-c`."""
     base = tmp_path / "input"
     (base / "shiftprofile-cache").mkdir(parents=True)
     _make_corruption_dir(base / "cifar10-c-corrupted-images" / "CIFAR-10-C")
 
     found = discover_cifar10c_root(base)
-    assert found == base / "cifar10-c-corrupted-images"
+    assert found is not None
+    assert "cifar10-c-corrupted-images" in found.parts
+    assert resolve_cifar10c_dir(found) == base / "cifar10-c-corrupted-images" / "CIFAR-10-C"
 
 
-def test_discover_returns_the_dataset_not_the_inner_arrays_dir(tmp_path):
-    """Callers pass the result as corrupt_root; resolve_cifar10c_dir descends.
+def test_discover_returns_something_resolve_accepts(tmp_path):
+    """The contract: whatever comes back can be passed straight as corrupt_root.
 
-    Returning the inner CIFAR-10-C/ directory would make resolve_cifar10c_dir
-    look for CIFAR-10-C/CIFAR-10-C/labels.npy and fail.
+    This is the property worth pinning rather than a particular directory. The
+    result goes to resolve_cifar10c_dir, and an answer that path cannot resolve
+    is useless however sensible it looks in a listing.
     """
     base = tmp_path / "input"
     _make_corruption_dir(base / "ds" / "CIFAR-10-C")
 
     found = discover_cifar10c_root(base)
-    assert found == base / "ds"
     assert resolve_cifar10c_dir(found) == base / "ds" / "CIFAR-10-C"
+
+
+def test_discover_reaches_arrays_nested_deeper_than_one_level(tmp_path):
+    """The case the one-level version missed, and the reason this is a search.
+
+    Uploading a folder rather than its contents leaves the arrays at
+    <dataset>/<folder>/CIFAR-10-C/, three levels below the mount root. The
+    earlier version checked only <dataset>/ and <dataset>/CIFAR-10-C/, so it
+    reported nothing found while the data sat on disk the whole time.
+    """
+    base = tmp_path / "input"
+    _make_corruption_dir(base / "datasets" / "cifar10c" / "CIFAR-10-C")
+
+    found = discover_cifar10c_root(base)
+    assert found is not None
+    assert resolve_cifar10c_dir(found).exists()
+    assert (resolve_cifar10c_dir(found) / "labels.npy").exists()
+
+
+def test_discover_stops_at_the_depth_limit(tmp_path):
+    """Bounded, because /kaggle/input can hold large unrelated datasets."""
+    deep = tmp_path / "input" / "a" / "b" / "c" / "d" / "e" / "f"
+    _make_corruption_dir(deep)
+
+    assert discover_cifar10c_root(tmp_path / "input", max_depth=3) is None
+    assert discover_cifar10c_root(tmp_path / "input", max_depth=9) is not None
+
+
+def test_discover_prefers_the_shallowest_match(tmp_path):
+    """Breadth-first, so an incidental deep copy cannot shadow the real mount."""
+    base = tmp_path / "input"
+    _make_corruption_dir(base / "shallow")
+    _make_corruption_dir(base / "deep" / "nested" / "further")
+
+    assert discover_cifar10c_root(base) == base / "shallow"
 
 
 def test_discover_is_deterministic_with_two_candidates(tmp_path):
@@ -468,3 +507,60 @@ def test_discover_is_deterministic_with_two_candidates(tmp_path):
 
     assert discover_cifar10c_root(base) == base / "aa-first"
     assert discover_cifar10c_root(base) == base / "aa-first"
+
+
+class TestDescribeMounts:
+    """The listing that goes into the failure message.
+
+    A session reported "attached Datasets are: datasets. None of them contains
+    .npy files" while the arrays were two levels deeper. Naming a directory
+    without showing its contents left the only way forward a guess, so the
+    message now carries a tree.
+    """
+
+    def test_missing_base_says_so_rather_than_returning_nothing(self, tmp_path):
+        lines = describe_mounts(tmp_path / "absent")
+        assert lines and "does not exist" in lines[0]
+
+    def test_empty_base_is_reported_as_empty(self, tmp_path):
+        base = tmp_path / "input"
+        base.mkdir()
+        assert describe_mounts(base) == ["(empty)"]
+
+    def test_nested_contents_are_shown(self, tmp_path):
+        base = tmp_path / "input"
+        _make_corruption_dir(base / "datasets" / "cifar10c" / "CIFAR-10-C")
+
+        text = "\n".join(describe_mounts(base))
+        assert "datasets/" in text
+        assert "cifar10c/" in text
+        assert "CIFAR-10-C/" in text
+        assert "labels.npy" in text, "the file the whole check turns on"
+
+    def test_an_empty_directory_is_distinguished_from_a_depth_cutoff(self, tmp_path):
+        base = tmp_path / "input"
+        (base / "still-processing").mkdir(parents=True)
+        (base / "deep" / "a" / "b" / "c" / "d").mkdir(parents=True)
+
+        text = "\n".join(describe_mounts(base, max_depth=2))
+        assert "(empty)" in text, "an empty upload must read as empty"
+        assert "not shown" in text, "a cut-off must not read as empty"
+
+    def test_many_files_are_summarised_rather_than_all_listed(self, tmp_path):
+        base = tmp_path / "input"
+        flat = base / "ds"
+        _make_corruption_dir(flat)
+        for i in range(20):
+            (flat / f"extra_{i}.npy").write_bytes(b"")
+
+        text = "\n".join(describe_mounts(base))
+        assert "more files" in text
+
+    def test_the_listing_is_line_capped(self, tmp_path):
+        base = tmp_path / "input"
+        for i in range(60):
+            (base / f"ds_{i:02d}").mkdir(parents=True)
+
+        lines = describe_mounts(base)
+        assert len(lines) <= cifar_module.MOUNT_LISTING_MAX_LINES + 1
+        assert "truncated" in lines[-1]
