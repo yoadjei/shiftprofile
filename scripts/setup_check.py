@@ -80,11 +80,18 @@ def check_clean_data(data_root: Path):
 
 
 def _looks_like_cifar10c(directory: Path) -> bool:
-    """Does this directory, or a child of it, hold corruption arrays?"""
+    """Could this directory be the CIFAR-10-C Dataset?
+
+    Looser than the library's `holds_cifar10c`, deliberately. That one requires
+    labels.npy, because without it the data is unusable. This one also accepts a
+    directory of corruption arrays with the labels missing, so the diagnostic can
+    point at the Dataset the user clearly meant and name what is absent from it,
+    rather than reporting that nothing was found.
+    """
+    from shiftprofile.data import holds_cifar10c
+
     try:
-        if (directory / "labels.npy").exists():
-            return True
-        if (directory / "CIFAR-10-C" / "labels.npy").exists():
+        if holds_cifar10c(directory):
             return True
         return any(directory.glob("*.npy")) or any(directory.glob("*/*.npy"))
     except OSError:
@@ -263,7 +270,12 @@ def check_cache(cache_dir: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--data-root", type=Path, default=Path("/kaggle/working/data"))
-    parser.add_argument("--corrupt-root", type=Path, default=Path("/kaggle/input/cifar-10-c"))
+    parser.add_argument(
+        "--corrupt-root",
+        type=Path,
+        default=None,
+        help="CIFAR-10-C root. Discovered from the attached Datasets if omitted.",
+    )
     parser.add_argument("--cache-dir", type=Path, default=Path("/kaggle/working/cache"))
     args = parser.parse_args(argv)
 
@@ -273,7 +285,20 @@ def main(argv: list[str] | None = None) -> int:
 
     check_gpu()
     clean = check_clean_data(args.data_root)
-    corrupt_dir = check_corrupt_data(args.corrupt_root)
+
+    # Resolve the corruption root after the package is importable, so discovery
+    # can use the library's own notion of what a CIFAR-10-C directory looks like.
+    corrupt_root = args.corrupt_root
+    if corrupt_root is None:
+        from shiftprofile.data import discover_cifar10c_root
+
+        conventional = Path("/kaggle/input/cifar-10-c")
+        discovered = None if conventional.exists() else discover_cifar10c_root()
+        corrupt_root = discovered or conventional
+        if discovered is not None:
+            print(f"\n  note: using discovered CIFAR-10-C at {discovered}")
+
+    corrupt_dir = check_corrupt_data(corrupt_root)
     check_alignment(clean, corrupt_dir)
     check_indices()
     check_cache(args.cache_dir)
