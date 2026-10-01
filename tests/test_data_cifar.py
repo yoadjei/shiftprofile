@@ -6,6 +6,9 @@ import pytest
 import torch
 from pathlib import Path
 from shiftprofile.data.cifar import (
+    discover_cifar10c_root,
+    holds_cifar10c,
+    resolve_cifar10c_dir,
     CORRUPTION_FAMILIES,
     PILOT_CORRUPTIONS,
     CIFAR10_MEAN,
@@ -376,3 +379,92 @@ def test_canonical_checksum_survives_a_dtype_round_trip():
         "if these ever match, the platform stopped distinguishing int widths and "
         "this test no longer guards anything"
     )
+
+
+# ============================================================================
+# Discovering CIFAR-10-C by content rather than by name
+#
+# The conventional mount path comes from a Kaggle Dataset slug, so naming the
+# Dataset anything but `cifar-10-c` moves it and every default misses. The
+# failure then names a path the user never chose, and the fix is to look up and
+# retype a slug -- a poor trade for information already on disk.
+# ============================================================================
+
+
+def _make_corruption_dir(directory, with_labels=True):
+    directory.mkdir(parents=True, exist_ok=True)
+    np.save(directory / "gaussian_noise.npy", np.zeros((10, 2), dtype=np.uint8))
+    if with_labels:
+        np.save(directory / "labels.npy", np.zeros(10, dtype=np.int64))
+
+
+def test_holds_cifar10c_requires_labels(tmp_path):
+    """labels.npy is not optional: every corruption is scored against it."""
+    _make_corruption_dir(tmp_path / "with", with_labels=True)
+    _make_corruption_dir(tmp_path / "without", with_labels=False)
+
+    assert holds_cifar10c(tmp_path / "with")
+    assert not holds_cifar10c(tmp_path / "without")
+
+
+def test_holds_cifar10c_accepts_either_layout(tmp_path):
+    _make_corruption_dir(tmp_path / "nested" / "CIFAR-10-C")
+    _make_corruption_dir(tmp_path / "flat")
+
+    assert holds_cifar10c(tmp_path / "nested")
+    assert holds_cifar10c(tmp_path / "flat")
+
+
+def test_holds_cifar10c_on_a_missing_directory_is_false_not_an_error(tmp_path):
+    assert not holds_cifar10c(tmp_path / "does-not-exist")
+
+
+def test_discover_returns_none_when_there_is_nothing_to_find(tmp_path):
+    assert discover_cifar10c_root(tmp_path / "absent") is None
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert discover_cifar10c_root(empty) is None
+
+
+def test_discover_ignores_unrelated_datasets(tmp_path):
+    base = tmp_path / "input"
+    (base / "shiftprofile-cache").mkdir(parents=True)
+    (base / "shiftprofile-cache" / ".gitkeep").write_text("")
+    (base / "some-csv-data").mkdir()
+    (base / "some-csv-data" / "train.csv").write_text("a,b\n1,2\n")
+
+    assert discover_cifar10c_root(base) is None
+
+
+def test_discover_finds_an_oddly_named_dataset(tmp_path):
+    """The case this function exists for."""
+    base = tmp_path / "input"
+    (base / "shiftprofile-cache").mkdir(parents=True)
+    _make_corruption_dir(base / "cifar10-c-corrupted-images" / "CIFAR-10-C")
+
+    found = discover_cifar10c_root(base)
+    assert found == base / "cifar10-c-corrupted-images"
+
+
+def test_discover_returns_the_dataset_not_the_inner_arrays_dir(tmp_path):
+    """Callers pass the result as corrupt_root; resolve_cifar10c_dir descends.
+
+    Returning the inner CIFAR-10-C/ directory would make resolve_cifar10c_dir
+    look for CIFAR-10-C/CIFAR-10-C/labels.npy and fail.
+    """
+    base = tmp_path / "input"
+    _make_corruption_dir(base / "ds" / "CIFAR-10-C")
+
+    found = discover_cifar10c_root(base)
+    assert found == base / "ds"
+    assert resolve_cifar10c_dir(found) == base / "ds" / "CIFAR-10-C"
+
+
+def test_discover_is_deterministic_with_two_candidates(tmp_path):
+    base = tmp_path / "input"
+    _make_corruption_dir(base / "zz-second")
+    _make_corruption_dir(base / "aa-first")
+
+    assert discover_cifar10c_root(base) == base / "aa-first"
+    assert discover_cifar10c_root(base) == base / "aa-first"
