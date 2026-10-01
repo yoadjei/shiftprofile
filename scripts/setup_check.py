@@ -79,23 +79,28 @@ def check_clean_data(data_root: Path):
     return images, labels
 
 
-def _looks_like_cifar10c(directory: Path) -> bool:
-    """Could this directory be the CIFAR-10-C Dataset?
+def _find_npy_dir(base: Path, max_depth: int = 5) -> Path | None:
+    """The shallowest directory under `base` holding any .npy file.
 
-    Looser than the library's `holds_cifar10c`, deliberately. That one requires
-    labels.npy, because without it the data is unusable. This one also accepts a
-    directory of corruption arrays with the labels missing, so the diagnostic can
-    point at the Dataset the user clearly meant and name what is absent from it,
-    rather than reporting that nothing was found.
+    Used only for the diagnostic, so it is looser than the library's discovery:
+    that one needs labels.npy because the data is unusable without it. A folder
+    of corruption arrays with the labels left out is a real and distinguishable
+    mistake, and pointing at it beats reporting that nothing was found.
     """
-    from shiftprofile.data import holds_cifar10c
-
-    try:
-        if holds_cifar10c(directory):
-            return True
-        return any(directory.glob("*.npy")) or any(directory.glob("*/*.npy"))
-    except OSError:
-        return False
+    frontier = [base]
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        nxt: list[Path] = []
+        for directory in frontier:
+            try:
+                if any(directory.glob("*.npy")):
+                    return directory
+                nxt.extend(sorted(p for p in directory.iterdir() if p.is_dir()))
+            except OSError:
+                continue
+        frontier = nxt
+    return None
 
 
 def _diagnose_missing_mount(base: Path = Path("/kaggle/input")) -> str:
@@ -105,9 +110,16 @@ def _diagnose_missing_mount(base: Path = Path("/kaggle/input")) -> str:
     anything other than `cifar-10-c` mounts somewhere else and the check fails
     with a path the user never chose. Reporting only "does not exist" leaves
     them guessing between "I forgot to attach it" and "I named it differently",
-    which are very different fixes. Listing the mounts distinguishes the two
-    immediately.
+    which are very different fixes.
+
+    An earlier version named the attached Datasets and stopped there, which was
+    not enough: a real session reported "attached Datasets are: datasets. None
+    of them contains .npy files" when the arrays were sitting two levels further
+    down. Naming a directory without showing its contents left the only way
+    forward a guess. So print the tree.
     """
+    from shiftprofile.data import describe_mounts, discover_cifar10c_root
+
     if not base.exists():
         return (
             f"no {base} on this machine, so nothing is mounted. Pass "
@@ -125,21 +137,25 @@ def _diagnose_missing_mount(base: Path = Path("/kaggle/input")) -> str:
             "cifar-10-c Dataset, then re-run."
         )
 
-    candidates = [p for p in mounts if _looks_like_cifar10c(p)]
-    listing = ", ".join(p.name for p in mounts)
+    tree = "\n".join(f"          {line}" for line in describe_mounts(base))
 
-    if candidates:
-        best = candidates[0]
+    usable = discover_cifar10c_root(base)
+    if usable is not None:
+        return f"found usable data -- re-run with --corrupt-root {usable}"
+
+    partial = _find_npy_dir(base)
+    if partial is not None:
         return (
-            f"attached Datasets are: {listing}. {best.name} contains .npy files, "
-            f"so it is probably the one -- re-run with "
-            f"--corrupt-root {best}"
+            f"{partial} holds .npy files but no labels.npy, which every "
+            f"corruption is scored against, so the data cannot be used. "
+            f"Re-upload including labels.npy. What is mounted:\n{tree}"
         )
 
     return (
-        f"attached Datasets are: {listing}. None of them contains .npy files, so "
-        f"the CIFAR-10-C Dataset is not attached to this notebook yet. Add Input "
-        f"-> select it, then re-run."
+        f"no labels.npy and no .npy files anywhere under {base}, so CIFAR-10-C "
+        f"is not attached to this notebook yet. If the upload is still "
+        f"processing, wait for it to finish and restart the session. What is "
+        f"mounted:\n{tree}"
     )
 
 
