@@ -235,6 +235,34 @@ If any cell fails, **stop and fix it here.** Everything downstream is more expen
    - `Failed Z cells` — if any errors occurred
    - `Elapsed time` — wall-clock seconds
 
+#### Checking on a run without waiting for it
+
+Two things are written as the run goes, so neither depends on reaching the end:
+
+- **Artifacts.** Every cell is written to the cache the moment it finishes, atomically.
+  Nothing completed is ever lost to a preemption, and a resumed run skips it.
+- **`cache/run_manifest.jsonl`.** One JSON object per line, fsynced as written. Each unit
+  appears twice, once when it starts and once when it ends with its duration.
+
+Open a second cell at any time and read it:
+
+```
+!tail -5 /kaggle/working/cache/run_manifest.jsonl
+```
+
+Per-cell cost, slowest first — this is the number that decides whether the full grid fits
+in quota, and it is available after the *first* cell rather than at the end of the run:
+
+```
+!python -c "import json,sys; \
+rows=[json.loads(l) for l in open('/kaggle/working/cache/run_manifest.jsonl')]; \
+d=sorted([r for r in rows if r['event']=='completed'], key=lambda r:-r['seconds']); \
+[print(f\"{r['seconds']:8.1f}s  {r['cell_id']}\") for r in d[:10]]"
+```
+
+A `started` line with no matching `completed` or `failed` is the unit that was running
+when the session died. That is the only record of it.
+
 #### Step 6: Save the cache
 
 1. In notebook 01 Step 5, follow the save instructions:
