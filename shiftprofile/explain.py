@@ -23,14 +23,43 @@ import torch.nn.functional as F
 from scipy import ndimage
 
 
-EXPLAIN_VERSION = "explain-v1"
+# Bumped from explain-v1 when attribution moved from one image at a time to
+# real batches. The two paths agree mathematically, but cuDNN picks different
+# kernels at different batch sizes, so the float32 results are not guaranteed
+# bitwise equal. Rather than let a resumed run mix attributions from both
+# paths, the bump recomputes them -- which costs minutes now that it batches.
+EXPLAIN_VERSION = "explain-v2"
 IG_STEPS = 32
+
+# Attribution runs one model pass per image per IG step, so the batch size is
+# the difference between minutes and hours. Matches curves.py.
+EXPLAIN_BATCH_SIZE = 256
+
+
+def _per_image_targets(target, n: int, device: str) -> torch.Tensor:
+    """Normalise a target spec to one class index per image.
+
+    Attribution is taken against each image's own predicted class, so the
+    batched path needs a vector. A scalar is broadcast, which keeps the
+    single-target call sites and their tests working unchanged.
+    """
+    if isinstance(target, (int, np.integer)):
+        return torch.full((n,), int(target), dtype=torch.long, device=device)
+
+    targets = torch.as_tensor(target, dtype=torch.long, device=device).reshape(-1)
+    if targets.shape[0] != n:
+        raise ValueError(
+            f"got {targets.shape[0]} targets for {n} images. Each image is "
+            f"attributed against its own class, so the counts must match. Pass "
+            f"a scalar only when every image genuinely shares a target."
+        )
+    return targets
 
 
 def integrated_gradients(
     model: nn.Module,
     x: torch.Tensor,
-    target: int,
+    target,
     *,
     steps: int = IG_STEPS,
     baseline: str = "black",
@@ -41,7 +70,7 @@ def integrated_gradients(
     Args:
         model: A PyTorch model in eval mode.
         x: Input images of shape (n, 3, 32, 32) in normalized space.
-        target: Target class index.
+        target: Class index per image, or one scalar shared by the whole batch.
         steps: Number of IG integration steps (default: 32).
         baseline: "black" (zeros) or "blur" (Gaussian-blurred input).
         device: Device to run on ("cpu" or "cuda").
@@ -51,6 +80,12 @@ def integrated_gradients(
 
     Raises:
         ValueError: If baseline is not "black" or "blur".
+
+    Note:
+        Images in a batch are attributed independently, which holds because
+        `model.eval()` puts BatchNorm on its running statistics. In train mode
+        the batch statistics would couple the images and each attribution would
+        depend on what it happened to be batched with.
     """
     if baseline not in ("black", "blur"):
         raise ValueError(f"baseline must be 'black' or 'blur', got {baseline!r}")
@@ -71,6 +106,7 @@ def integrated_gradients(
         x_baseline = torch.from_numpy(x_baseline_np).to(device)
 
     model.eval()
+    targets = _per_image_targets(target, n, device)
     attributions = np.zeros((n, 32, 32), dtype=np.float32)
 
     for step in range(steps):
@@ -82,7 +118,10 @@ def integrated_gradients(
         # Forward pass
         with torch.enable_grad():
             out = model(x_interp)
-            target_out = out[:, target]
+            # gather, not out[:, target]: each image scores against its own
+            # class. Summing is safe because eval-mode BatchNorm keeps the
+            # images independent, so d(sum)/d(x_i) is image i's own gradient.
+            target_out = out.gather(1, targets.unsqueeze(1)).squeeze(1)
             loss = target_out.sum()
 
         # Backward pass
@@ -102,7 +141,7 @@ def integrated_gradients(
 def grad_cam(
     model: nn.Module,
     x: torch.Tensor,
-    target: int,
+    target,
     *,
     target_layer: Optional[nn.Module] = None,
     device: str = "cpu",
@@ -112,7 +151,7 @@ def grad_cam(
     Args:
         model: A PyTorch model in eval mode.
         x: Input images of shape (n, 3, 32, 32).
-        target: Target class index.
+        target: Class index per image, or one scalar shared by the whole batch.
         target_layer: Layer to hook (default: auto-detect from model).
         device: Device to run on ("cpu" or "cuda").
 
@@ -124,6 +163,8 @@ def grad_cam(
 
     Note:
         All hooks are removed in a finally block to prevent session pollution.
+        As with IG, batched images are independent only because `model.eval()`
+        puts BatchNorm on its running statistics.
     """
     from shiftprofile.models.vision import gradcam_target_layer
 
@@ -134,6 +175,7 @@ def grad_cam(
         target_layer = gradcam_target_layer(model)
 
     model.eval()
+    targets = _per_image_targets(target, n, device)
     attributions = np.zeros((n, 32, 32), dtype=np.float32)
 
     # Storage for activations and gradients
@@ -156,7 +198,7 @@ def grad_cam(
         x_input = x.clone().requires_grad_(True)
         with torch.enable_grad():
             out = model(x_input)
-            target_out = out[:, target]
+            target_out = out.gather(1, targets.unsqueeze(1)).squeeze(1)
             loss = target_out.sum()
 
         loss.backward()
@@ -207,6 +249,7 @@ def explain_batch(
     explainer: str,
     *,
     device: str = "cpu",
+    batch_size: int = EXPLAIN_BATCH_SIZE,
     **kw,
 ) -> np.ndarray:
     """Batch attribution dispatcher.
@@ -217,6 +260,7 @@ def explain_batch(
         targets: Target class indices (n,).
         explainer: Name of explainer ("integrated_gradients", "grad_cam", "random").
         device: Device to run on.
+        batch_size: Images per model pass (default: 256).
         **kw: Additional kwargs passed to the explainer.
 
     Returns:
@@ -224,6 +268,14 @@ def explain_batch(
 
     Raises:
         ValueError: If explainer is unknown.
+
+    Note:
+        This dispatched one image at a time until the explainers learned to
+        take a target per image. On a T4 that left the GPU almost entirely
+        idle: IG at 32 steps over 1000 images is 32,000 model passes, and at
+        batch size 1 the cost is kernel-launch overhead rather than compute.
+        One pilot cell took about 55 minutes, which put the full grid at
+        roughly 220 GPU-hours for this stage alone.
     """
     explainers = {
         "integrated_gradients": integrated_gradients,
@@ -257,7 +309,6 @@ def explain_batch(
         )
 
     n = images.shape[0]
-    targets_list = targets.tolist() if hasattr(targets, 'tolist') else list(targets)
 
     if explainer == "random":
         if "seed" not in kw:
@@ -268,16 +319,29 @@ def explain_batch(
             )
         return random_attribution((n, 32, 32), seed=kw["seed"])
 
-    # For integrated_gradients and grad_cam, call per-image with its target
-    fn = explainers[explainer]
-    attributions = []
-    for i in range(n):
-        img = images[i:i+1]  # Keep batch dimension
-        target = targets_list[i]
-        attr = fn(model, img, target=target, device=device, **kw)
-        attributions.append(attr)
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be at least 1, got {batch_size}")
 
-    return np.concatenate(attributions, axis=0)
+    # Both remaining explainers take a target per image, so a chunk is one
+    # model pass rather than one per image.
+    fn = explainers[explainer]
+    targets = torch.as_tensor(targets, dtype=torch.long).reshape(-1)
+    if targets.shape[0] != n:
+        raise ValueError(
+            f"got {targets.shape[0]} targets for {n} images; they must match."
+        )
+
+    chunks = [
+        fn(
+            model,
+            images[start:start + batch_size],
+            target=targets[start:start + batch_size],
+            device=device,
+            **kw,
+        )
+        for start in range(0, n, batch_size)
+    ]
+    return np.concatenate(chunks, axis=0)
 
 
 def to_common_grid(attribution: np.ndarray, grid: int = 8) -> np.ndarray:
