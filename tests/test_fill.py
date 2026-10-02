@@ -21,6 +21,200 @@ from shiftprofile.cells import Cell, CLEAN
 from shiftprofile.fill import FillReport, load_config, fill
 
 
+class TestRunManifest:
+    """The run's account of itself, written as it happens.
+
+    Artifacts were already checkpointed per cell. What a preempted session
+    lost was the record of what it had done and what anything cost -- which is
+    how a pilot ran six hours before anyone could see that one cell was taking
+    fifty-five minutes.
+    """
+
+    def _config(self):
+        return {
+            "track": "vision",
+            "models": ["resnet18"],
+            "seeds": [0],
+            "shift_families": ["gaussian_noise"],
+            "severities": [1],
+            "explainers": ["random"],
+            "imputations": ["mean"],
+        }
+
+    def _lines(self, path: Path) -> list[dict]:
+        import json
+
+        return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+
+    def test_every_unit_is_recorded_with_its_duration(self, tmp_path):
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "manifest.jsonl"
+        with RunManifest(path) as manifest:
+            fill(
+                self._config(),
+                ArtifactCache(write_root=tmp_path / "cache"),
+                budget_minutes=60,
+                manifest=manifest,
+                stages_impl={
+                    "predict": lambda *a, **k: np.zeros(1),
+                    "explain": lambda *a, **k: np.zeros(1),
+                    "curves": lambda *a, **k: np.zeros(1),
+                },
+            )
+
+        done = [r for r in self._lines(path) if r["event"] == "completed"]
+        assert done, "nothing was recorded as completed"
+        assert all("seconds" in r for r in done), "a duration is the point"
+        assert {r["stage"] for r in done} == {"predict", "explain", "curves"}
+
+    def test_a_unit_killed_mid_work_leaves_a_start_with_no_end(self, tmp_path):
+        """The line you most want after a session dies.
+
+        A record written only on completion cannot say which unit was running.
+        This simulates the kill by raising out of the stage function, past
+        fill()'s own error handling, the way a SIGKILL would skip it.
+        """
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "manifest.jsonl"
+
+        def killed(*a, **k):
+            raise KeyboardInterrupt("session preempted")
+
+        with pytest.raises(KeyboardInterrupt):
+            with RunManifest(path) as manifest:
+                fill(
+                    self._config(),
+                    ArtifactCache(write_root=tmp_path / "cache"),
+                    budget_minutes=60,
+                    manifest=manifest,
+                    stages_impl={"predict": killed},
+                )
+
+        records = self._lines(path)
+        started = {r["cell_id"] for r in records if r["event"] == "started"}
+        ended = {r["cell_id"] for r in records if r["event"] in ("completed", "failed")}
+        assert started - ended, "the interrupted unit is not identifiable"
+
+    def test_records_are_durable_without_a_clean_close(self, tmp_path):
+        """fsync per line, because a preempted kernel never unwinds."""
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "manifest.jsonl"
+        manifest = RunManifest(path)
+        manifest.record(event="started", stage="predict", cell_id="x")
+
+        # Deliberately not closed: read it from a separate handle.
+        assert self._lines(path) == [
+            {"cell_id": "x", "event": "started", "stage": "predict"}
+        ]
+        manifest.close()
+
+    def test_a_resumed_run_appends_rather_than_truncating(self, tmp_path):
+        """Two preempted sessions must not erase each other's history."""
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "manifest.jsonl"
+        with RunManifest(path) as first:
+            first.record(event="run_start", attempt=1)
+        with RunManifest(path) as second:
+            second.record(event="run_start", attempt=2)
+
+        assert [r["attempt"] for r in self._lines(path)] == [1, 2]
+
+    def test_cached_units_are_recorded_so_a_resume_is_auditable(self, tmp_path):
+        """A resumed session should say what it found, not just what it did."""
+        from shiftprofile.fill import RunManifest
+        from shiftprofile.predict import PREDICT_VERSION
+
+        cache = ArtifactCache(tmp_path / "cache")
+        config = self._config()
+        for family, severity in (("clean", 0), ("gaussian_noise", 1)):
+            cell = Cell("vision", "resnet18", 0, family, severity)
+            cache.put_array(
+                {**cell.spec(), "stage": "predict"},
+                PREDICT_VERSION,
+                np.zeros((4, 2)),
+            )
+
+        path = tmp_path / "manifest.jsonl"
+        with RunManifest(path) as manifest:
+            fill(
+                config, cache, budget_minutes=60, manifest=manifest,
+                stages=("predict",),
+                stages_impl={"predict": lambda *a, **k: np.zeros(1)},
+            )
+
+        records = self._lines(path)
+        skipped = [r for r in records if r["event"] == "skipped_cached"]
+        assert len(skipped) == 2, "both pre-cached units should be recorded"
+        assert all(r["version"] == PREDICT_VERSION for r in skipped), (
+            "the version is what makes a skip auditable: it says which key hit"
+        )
+        assert not [r for r in records if r["event"] == "started"]
+
+
+class TestStageVersionsHaveOneSourceOfTruth:
+    """The filler must look for exactly the key the stage writes.
+
+    fill() decides whether an artifact is already cached; the stage module
+    decides what version to write it under. These were two separate string
+    literals, so bumping explain-v1 to explain-v2 in explain.py alone would
+    have left the filler checking for a key nothing writes: every cell a miss,
+    every run recomputing the whole stage, and the report saying "completed"
+    each time. Silent, expensive, and invisible in any single run's output.
+    """
+
+    def test_fill_uses_the_version_each_stage_module_defines(self, tmp_path):
+        from shiftprofile.curves import CURVES_VERSION
+        from shiftprofile.explain import EXPLAIN_VERSION
+        from shiftprofile.predict import PREDICT_VERSION
+
+        seen: dict[str, str] = {}
+
+        class RecordingCache(ArtifactCache):
+            def has(self, spec, version, kind="array"):
+                seen[spec.get("stage", "?")] = version
+                return super().has(spec, version, kind=kind)
+
+        config = {
+            "track": "vision",
+            "models": ["resnet18"],
+            "seeds": [0],
+            "shift_families": ["gaussian_noise"],
+            "severities": [1],
+            "explainers": ["random"],
+            "imputations": ["mean"],
+        }
+        fill(
+            config,
+            RecordingCache(write_root=tmp_path / "cache"),
+            # Not zero: the filler returns as soon as the budget is spent, so a
+            # zero budget never reaches the later stages and the assertions
+            # below would pass vacuously on a missing key.
+            budget_minutes=60,
+            stages_impl={
+                "predict": lambda *a, **k: np.zeros(1),
+                "explain": lambda *a, **k: np.zeros(1),
+                "curves": lambda *a, **k: np.zeros(1),
+            },
+        )
+
+        assert seen.get("predict") == PREDICT_VERSION
+        assert seen.get("explain") == EXPLAIN_VERSION
+        assert seen.get("curves") == CURVES_VERSION
+
+    def test_no_stage_version_is_written_out_again_as_a_literal(self):
+        """A second copy would drift; catch it at the source."""
+        source = (Path(__file__).resolve().parent.parent / "shiftprofile" / "fill.py").read_text()
+        for literal in ('"predict-v', '"explain-v', '"curves-v'):
+            assert literal not in source, (
+                f"fill.py contains the literal {literal}...; import the "
+                f"constant from the stage module instead"
+            )
+
+
 class TestFillReport:
     """FillReport construction and summary generation."""
 
