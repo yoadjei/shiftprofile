@@ -11,6 +11,8 @@ and continues, and reports what was not reached.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +33,48 @@ class StageSpec:
     kind: str  # "array" or "record"
     per_explainer: bool  # does this stage fan out over explainers?
     per_imputation: bool  # does it also fan out over imputation schemes?
+
+
+class RunManifest:
+    """An append-only record of what a run did, written as it happens.
+
+    Artifacts were already checkpointed -- each stage writes its own file
+    atomically, so a resumed run skips what is on disk. What did not survive a
+    preempted session was the account of the run itself: the FillReport existed
+    only in memory and printed at the end, so a session killed at hour eleven
+    left no record of what it had done or how long anything took.
+
+    That second part turned out to matter more than it sounds. A pilot ran for
+    six hours before anyone could tell that one attribution cell was taking
+    fifty-five minutes, because nothing recorded per-cell timing. The cost of
+    the full grid was derivable from the first cell and nobody had the number.
+
+    One JSON object per line, flushed and fsynced as it is written, so a hard
+    kill loses at most the line in flight. A unit is written twice: once when
+    it starts and once when it ends. An entry with no matching end is the unit
+    that was running when the session died, which is the thing you most want to
+    know and the thing a summary printed at exit can never tell you.
+    """
+
+    def __init__(self, path: Path | str):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.path.open("a", encoding="utf-8", newline="\n")
+
+    def record(self, **fields: Any) -> None:
+        self._handle.write(json.dumps(fields, sort_keys=True) + "\n")
+        self._handle.flush()
+        os.fsync(self._handle.fileno())
+
+    def close(self) -> None:
+        if not self._handle.closed:
+            self._handle.close()
+
+    def __enter__(self) -> "RunManifest":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
 
 
 @dataclass
@@ -118,6 +162,7 @@ def fill(
     stages: tuple[str, ...] = ("predict", "explain", "curves"),
     progress: Optional[Callable[[str, str], None]] = None,
     stages_impl: Optional[dict[str, Callable]] = None,
+    manifest: Optional["RunManifest"] = None,
     now: Callable[[], float] = time.monotonic,
 ) -> FillReport:
     """Fill the work list until the budget runs out.
@@ -143,6 +188,9 @@ def fill(
                      If not provided, uses the default implementations from
                      predict.py, explain.py, curves.py (which require real
                      data and models and are not available in pure CPU mode).
+        manifest: Optional RunManifest. Each unit is recorded as it starts and
+                  again as it ends, with its duration, so a preempted session
+                  leaves a readable account of what it did and what cost what.
         now: Injected clock function for testing. Defaults to time.monotonic().
 
     Returns:
@@ -152,11 +200,22 @@ def fill(
     if stages_impl is None:
         stages_impl = {}
 
-    # Define stage specifications
+    # Imported from the stage modules rather than written out again here. The
+    # filler decides whether an artifact is already cached and the stage module
+    # decides what to write it as, so a second copy of a version string is a
+    # producer/consumer mismatch waiting to happen: bump one, and the filler
+    # looks for a key nothing ever writes, misses every time, and recomputes
+    # the whole stage on every run while reporting success. Imported inside the
+    # function because these modules pull in torch, which the fill tests that
+    # supply their own stages_impl should not have to pay for.
+    from .curves import CURVES_VERSION
+    from .explain import EXPLAIN_VERSION
+    from .predict import PREDICT_VERSION
+
     stage_specs = {
-        "predict": StageSpec("predict", "predict-v1", "array", per_explainer=False, per_imputation=False),
-        "explain": StageSpec("explain", "explain-v1", "array", per_explainer=True, per_imputation=False),
-        "curves": StageSpec("curves", "curves-v1", "array", per_explainer=True, per_imputation=True),
+        "predict": StageSpec("predict", PREDICT_VERSION, "array", per_explainer=False, per_imputation=False),
+        "explain": StageSpec("explain", EXPLAIN_VERSION, "array", per_explainer=True, per_imputation=False),
+        "curves": StageSpec("curves", CURVES_VERSION, "array", per_explainer=True, per_imputation=True),
     }
 
     report = FillReport()
@@ -202,6 +261,13 @@ def fill(
                         if spec.per_imputation:
                             cell_id += f":{imputation}"
                         report.skipped_cached.append(cell_id)
+                        if manifest:
+                            manifest.record(
+                                event="skipped_cached",
+                                stage=spec.name,
+                                cell_id=cell_id,
+                                version=spec.version,
+                            )
                         continue
 
                     # Check budget before starting
@@ -209,6 +275,12 @@ def fill(
                     if elapsed > budget_seconds:
                         report.budget_exhausted = True
                         report.elapsed_seconds = now() - start_time
+                        if manifest:
+                            manifest.record(
+                                event="budget_exhausted",
+                                stage=spec.name,
+                                elapsed_seconds=round(report.elapsed_seconds, 3),
+                            )
                         return report
 
                     # Build cell_id string
@@ -222,6 +294,16 @@ def fill(
                     if stage_fn is None:
                         report.not_implemented.append(cell_id)
                         continue
+
+                    # Written before the work, not after. A unit with a start
+                    # and no end is the one that was running when the session
+                    # died -- the single most useful line in the file, and one
+                    # a record written on completion can never contain.
+                    if manifest:
+                        manifest.record(
+                            event="started", stage=spec.name, cell_id=cell_id
+                        )
+                    unit_start = now()
 
                     try:
                         if progress:
@@ -237,10 +319,29 @@ def fill(
                         stage_fn(cell, cache, **kw)
 
                         report.completed.append(cell_id)
+                        if manifest:
+                            manifest.record(
+                                event="completed",
+                                stage=spec.name,
+                                cell_id=cell_id,
+                                seconds=round(now() - unit_start, 3),
+                            )
                     except Exception as e:
                         report.failed.append((cell_id, str(e)))
+                        if manifest:
+                            manifest.record(
+                                event="failed",
+                                stage=spec.name,
+                                cell_id=cell_id,
+                                seconds=round(now() - unit_start, 3),
+                                error=f"{type(e).__name__}: {e}",
+                            )
 
     report.elapsed_seconds = now() - start_time
+    if manifest:
+        manifest.record(
+            event="finished", elapsed_seconds=round(report.elapsed_seconds, 3)
+        )
     return report
 
 
@@ -298,6 +399,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--stages", nargs="+", default=["predict", "explain", "curves"],
         help="Stages to run, in cost-ascending order",
+    )
+    parser.add_argument(
+        "--manifest", type=Path, default=None,
+        help="Run log, one JSON object per line. Defaults to "
+             "run_manifest.jsonl inside the write cache, so it is saved "
+             "along with the artifacts.",
     )
 
     args = parser.parse_args(argv)
@@ -379,28 +486,48 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"budget      {args.budget_minutes:.0f} min")
     print(f"cache write {args.cache_write}")
     print(f"cache read  {', '.join(str(p) for p in args.cache_read) or '(none)'}")
+    # Default it into the write cache so that whatever persists the artifacts
+    # persists the account of how they were made, with no second thing to
+    # remember to save.
+    manifest_path = args.manifest or (args.cache_write / "run_manifest.jsonl")
+
     print(f"data        {clean_root}")
     print(f"corrupt     {corrupt_root}")
     print(f"stages      {', '.join(args.stages)}")
+    print(f"manifest    {manifest_path}")
     print()
 
-    report = fill(
-        config,
-        cache,
-        budget_minutes=args.budget_minutes,
-        device=device,
-        stages=tuple(args.stages),
-        stages_impl={
-            "predict": predict_stage,
-            "explain": explain_stage,
-            "curves": curves_stage,
-        },
-        progress=lambda stage, cell_id: print(f"  {stage}: {cell_id}", flush=True),
-    )
+    with RunManifest(manifest_path) as manifest:
+        manifest.record(
+            event="run_start",
+            config=str(args.config),
+            device=device,
+            budget_minutes=args.budget_minutes,
+            stages=list(args.stages),
+            # Wall-clock, unlike the monotonic clock used for durations. A
+            # manifest spanning several preempted sessions is unreadable
+            # without knowing which day each run happened.
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        )
+        report = fill(
+            config,
+            cache,
+            budget_minutes=args.budget_minutes,
+            device=device,
+            stages=tuple(args.stages),
+            stages_impl={
+                "predict": predict_stage,
+                "explain": explain_stage,
+                "curves": curves_stage,
+            },
+            progress=lambda stage, cell_id: print(f"  {stage}: {cell_id}", flush=True),
+            manifest=manifest,
+        )
 
     print()
     print("=" * 60)
     print(report.summary())
+    print(f"manifest written to {manifest_path}")
     print("=" * 60)
     return 0 if not report.failed else 1
 
