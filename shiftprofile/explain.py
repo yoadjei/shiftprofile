@@ -370,6 +370,95 @@ def to_common_grid(attribution: np.ndarray, grid: int = 8) -> np.ndarray:
     return pooled.astype(np.float32)
 
 
+def explainer_options(
+    explainer: str,
+    *,
+    ig_steps: int = IG_STEPS,
+    baseline: str = "black",
+    random_seed: int = 0,
+) -> dict:
+    """The options this explainer actually consumes, and nothing else.
+
+    One source for two callers that must agree: `explain_spec` puts this in the
+    cache key, and `explain_cell` passes it to `explain_batch`. If they disagreed,
+    an attribution would be keyed on options other than the ones it was computed
+    with -- the defect this whole module's keying was rewritten to close.
+
+    Only the options the dispatched explainer reads are returned. Grad-CAM reads
+    none, so changing `ig_steps` must not invalidate a Grad-CAM artifact; keying
+    every explainer on every option would fork the cache for no reason and cost
+    quota this project does not have.
+
+    `baseline` matters beyond correctness: E6 varies the IG baseline, so it has to
+    be part of the key or the ablation's attributions would collide with the
+    frozen protocol's and silently serve the wrong ones.
+    """
+    options = {
+        "integrated_gradients": {"steps": ig_steps, "baseline": baseline},
+        "grad_cam": {},
+        "random": {"seed": random_seed},
+    }
+    if explainer not in options:
+        raise ValueError(
+            f"unknown explainer {explainer!r}; expected one of {sorted(options)}"
+        )
+    return options[explainer]
+
+
+def explain_spec(
+    cell,
+    *,
+    explainer: str,
+    indices: np.ndarray,
+    ig_steps: int = IG_STEPS,
+    baseline: str = "black",
+    random_seed: int = 0,
+) -> dict:
+    """The cache key for this cell's attributions. The only place it is built.
+
+    `inputs` names the predict version actually read, because attributions are
+    taken against the model's PREDICTED class. Without that, bumping the predict
+    version would leave attributions keyed as though nothing changed, pointing at
+    target classes that no longer exist on disk.
+
+    `options` carries the explainer's own settings, so that varying the IG
+    baseline or step count -- which E6 does -- cannot collide with the frozen
+    protocol's attributions.
+    """
+    from .cells import stage_spec
+    from .data import eval_digest
+    from .predict import PREDICT_VERSION
+
+    return stage_spec(
+        cell,
+        "explain",
+        explainer=explainer,
+        options=explainer_options(
+            explainer, ig_steps=ig_steps, baseline=baseline, random_seed=random_seed
+        ),
+        evaluated=eval_digest(indices),
+        inputs={"predict": PREDICT_VERSION},
+    )
+
+
+def explain_is_cached(
+    cell, cache, *, explainer: str, indices: np.ndarray, **options
+) -> bool:
+    """Whether this cell's attributions for this explainer are already on disk.
+
+    Takes the options as loose keywords, the same shape `explain_cell` takes them
+    in, because `fill` hands this predicate and that producer the same arguments.
+    A predicate whose signature differed from its producer's would be asked about
+    one artifact while the producer computed another -- which is the whole class
+    of defect this module's keying was rewritten to close.
+    """
+    return cache.has(
+        explain_spec(cell, explainer=explainer, indices=indices, **options),
+        EXPLAIN_VERSION,
+        kind="array",
+    )
+
+
 def explain_cell(
     cell,  # Cell object
     model: nn.Module,
@@ -378,8 +467,8 @@ def explain_cell(
     cache,  # ArtifactCache
     *,
     explainer: str,
+    indices: np.ndarray,
     device: str = "cpu",
-    indices: Optional[np.ndarray] = None,
     ig_steps: int = IG_STEPS,
     baseline: str = "black",
     random_seed: int = 0,
@@ -397,23 +486,33 @@ def explain_cell(
         corrupt_root: Root directory for CIFAR-10-C data.
         cache: ArtifactCache for storing/loading attributions.
         explainer: Name of explainer ("integrated_gradients", "grad_cam", "random").
+        indices: REQUIRED. The images to attribute, from
+                 `fixed_eval_indices(n_eval_images)`. Part of the cache key.
         device: Device to run on.
-        indices: Optional array of indices to select from the data.
         ig_steps: Number of IG integration steps.
         baseline: Baseline for IG ("black" or "blur").
         random_seed: Seed for random attribution reproducibility.
 
     Returns:
-        Attribution array of shape (n, 32, 32) with dtype float32.
+        Attribution array of shape (len(indices), 32, 32) with dtype float32.
 
     Raises:
         ValueError: If predictions are not cached.
     """
     from .data import load_cell_images, to_normalised_tensor
+    from .predict import PREDICT_VERSION, predict_spec as predict_key
 
-    from .cells import stage_spec
-
-    spec = stage_spec(cell, "explain", explainer=explainer)
+    options = explainer_options(
+        explainer, ig_steps=ig_steps, baseline=baseline, random_seed=random_seed
+    )
+    spec = explain_spec(
+        cell,
+        explainer=explainer,
+        indices=indices,
+        ig_steps=ig_steps,
+        baseline=baseline,
+        random_seed=random_seed,
+    )
 
     # Check cache first
     if cache.has(spec, EXPLAIN_VERSION, kind="array"):
@@ -427,39 +526,35 @@ def explain_cell(
         indices=indices,
     )
 
-    # Load predicted logits to determine target class
-    # Predictions are keyed on cell alone (no explainer)
-    from .predict import PREDICT_VERSION
-    predict_spec = stage_spec(cell, "predict")
-    if not cache.has(predict_spec, PREDICT_VERSION, kind="array"):
+    # Read the predictions through predict's own key builder. Writing the key out
+    # here again is how a consumer and a producer come to disagree, and the same
+    # index set must select the same images on both sides.
+    upstream = predict_key(cell, indices=indices)
+    if not cache.has(upstream, PREDICT_VERSION, kind="array"):
         raise ValueError(
-            f"explain_cell requires cached predictions for cell {cell}. "
-            f"Run predict stage first."
+            f"explain_cell requires cached predictions for cell {cell} over the "
+            f"same {len(indices)} evaluation images. Run the predict stage first "
+            f"with the same n_eval_images."
         )
 
-    logits = cache.get_array(predict_spec, PREDICT_VERSION)
+    logits = cache.get_array(upstream, PREDICT_VERSION)
     predicted_classes = np.argmax(logits, axis=1)  # (n,)
 
     # Convert images to tensor
     tensor = to_normalised_tensor(images)
     tensor = tensor.to(device)
 
-    # Compute attributions
-    # Route only the options this explainer understands. explain_batch rejects
-    # the rest rather than dropping them silently.
-    explainer_kw = {
-        "integrated_gradients": {"steps": ig_steps, "baseline": baseline},
-        "grad_cam": {},
-        "random": {"seed": random_seed},
-    }[explainer]
-
+    # The same options that went into the cache key above, from the same
+    # function, so the artifact cannot be keyed on settings it was not computed
+    # with. explain_batch rejects options an explainer does not understand rather
+    # than dropping them silently.
     attributions = explain_batch(
         model,
         tensor,
         torch.from_numpy(predicted_classes).to(device),
         explainer,
         device=device,
-        **explainer_kw,
+        **options,
     )
 
     # Attributions are the bulk of the cache (~1 GB at Version A), so they are
