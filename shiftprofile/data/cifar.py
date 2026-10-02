@@ -14,6 +14,8 @@ CIFAR-10-C format:
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import torch
 from pathlib import Path
@@ -63,6 +65,66 @@ def fixed_eval_indices(n: int, total: int = 10000, seed: int = 20260923) -> np.n
     # between a laptop and a Kaggle runner and look like a reproducibility
     # failure. Pin the width so the bytes are as portable as the values.
     return rng.permutation(total)[:n].astype(np.int64)
+
+
+def eval_digest(indices: np.ndarray) -> str:
+    """Short stable digest of an evaluation index set, for a cache key.
+
+    An artifact computed over 1,000 images and one computed over 10,000 are
+    different artifacts, and for most of this project's life they shared a cache
+    key. Including this digest is what keeps them apart.
+
+    `indices` is REQUIRED and may not be None. A digest for "no index set" --
+    some sentinel standing in for the whole test set -- would mean that
+    forgetting to pass an index set still produces a valid-looking key, which is
+    exactly the defect this function exists to close. The caller must say which
+    images it evaluated, so the omission raises instead of silently colliding
+    with artifacts over a different set.
+
+    int64 is required rather than coerced for the same reason `fixed_eval_indices`
+    pins it: `permutation` returns the platform's default integer width, 32-bit
+    on Windows and 64-bit on Linux, so coercing would let two machines compute
+    the same indices and hash them to different keys.
+
+    Args:
+        indices: 1-D array of int64 indices, as returned by `fixed_eval_indices`.
+
+    Returns:
+        First 16 hex characters of the SHA-256 of the index bytes.
+
+    Raises:
+        TypeError: If `indices` is None or not an int64 ndarray.
+        ValueError: If `indices` is not one-dimensional or is empty.
+    """
+    if indices is None:
+        raise TypeError(
+            "eval_digest requires an index set; None is not accepted. An "
+            "artifact's key must name the images it was computed over, and a "
+            "digest standing for 'no index set' would let a forgotten argument "
+            "produce a valid key. Pass fixed_eval_indices(n_eval_images)."
+        )
+    if not isinstance(indices, np.ndarray):
+        raise TypeError(
+            f"indices must be a numpy array, got {type(indices).__name__}. A "
+            f"list would be coerced at the platform's default integer width and "
+            f"hash differently on Windows and Linux."
+        )
+    if indices.dtype != np.int64:
+        raise TypeError(
+            f"indices must be int64, got {indices.dtype}. fixed_eval_indices "
+            f"pins int64 so the bytes are portable; coercing here would hide a "
+            f"caller that built its indices some other way."
+        )
+    if indices.ndim != 1:
+        raise ValueError(f"indices must be one-dimensional, got shape {indices.shape}")
+    if indices.size == 0:
+        raise ValueError("indices is empty; an artifact over no images is not an artifact")
+
+    # '<i8', not tobytes() alone: tobytes() uses the machine's native byte order,
+    # so the same indices would hash differently on a big-endian host. Pinning the
+    # order costs nothing and removes the assumption, in the same spirit as
+    # fixed_eval_indices pinning the width.
+    return hashlib.sha256(indices.astype("<i8", copy=False).tobytes()).hexdigest()[:16]
 
 
 def load_cifar10_test(root: Path | str) -> Tuple[np.ndarray, np.ndarray]:
