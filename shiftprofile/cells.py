@@ -11,7 +11,7 @@ models — which is what makes the coupling claims defensible with so few models
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from .cache import ArtifactCache
 
@@ -36,7 +36,14 @@ class Cell:
         }
 
 
-def stage_spec(cell: Cell, stage: str, **extra: Any) -> dict[str, Any]:
+def stage_spec(
+    cell: Cell,
+    stage: str,
+    *,
+    evaluated: Optional[str] = None,
+    inputs: Optional[dict[str, str]] = None,
+    **extra: Any,
+) -> dict[str, Any]:
     """The cache spec for one stage's artifact on one cell. THE single source.
 
     Every producer and every work-list check must build its key through this
@@ -50,8 +57,36 @@ def stage_spec(cell: Cell, stage: str, **extra: Any) -> dict[str, Any]:
     `explainer` plus `imputation` plus `which` for removal curves. Those axes are
     what the E6 ablation varies, so results computed under different settings
     must never collide on one key.
+
+    `evaluated` and `inputs` are spelled out in the signature rather than left to
+    `extra` so that a reader of a call site can see whether they were supplied.
+    Both name something that determines the artifact's contents but is not
+    visible in the data it was computed from:
+
+    `evaluated` is `eval_digest(indices)` — which images. Artifacts over 1,000
+    images and over 10,000 shared one key for most of this project's life,
+    because `n_eval_images` never reached a producer at all.
+
+    `inputs` maps each upstream stage to the producer version actually read, e.g.
+    `{"predict": PREDICT_VERSION}` for attributions. Without it, bumping
+    `explain-v1` to `explain-v2` recomputed attributions and left the curves
+    derived from the old ones in place under an unchanged key, silently pairing
+    results with inputs that no longer existed.
+
+    Neither is defaulted to a stand-in value. A stage that evaluates images must
+    pass `evaluated`; see `eval_digest` for why a sentinel would reopen the hole.
     """
-    return {**cell.spec(), "stage": stage, **extra}
+    spec = {**cell.spec(), "stage": stage, **extra}
+    if evaluated is not None:
+        spec["evaluated"] = evaluated
+    if inputs is not None:
+        if not inputs:
+            raise ValueError(
+                "inputs is empty; omit it entirely for a stage that reads no "
+                "upstream artifact, rather than recording that it reads nothing"
+            )
+        spec["inputs"] = dict(inputs)
+    return spec
 
 
 def enumerate_cells(config: dict[str, Any], track: str) -> list[Cell]:
