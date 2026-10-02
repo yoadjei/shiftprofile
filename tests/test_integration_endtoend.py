@@ -23,12 +23,22 @@ import torch
 from shiftprofile.cache import ArtifactCache
 from shiftprofile.cells import Cell
 from shiftprofile.curves import CURVES_VERSION, curves_cell
-from shiftprofile.explain import EXPLAIN_VERSION, explain_cell
+from shiftprofile.data import fixed_eval_indices
+from shiftprofile.explain import EXPLAIN_VERSION, explain_cell, explain_spec
 from shiftprofile.models.vision import resnet18_cifar
 from shiftprofile.predict import PREDICT_VERSION, predict_cell
 
 N_IMAGES = 4
 IG_STEPS = 4  # keep the test under a second; correctness of IG is tested elsewhere
+
+# Every stage is keyed on the evaluation index set, so the chain has to carry a
+# real one. Drawn over the fake data's own length rather than CIFAR's 10,000.
+INDICES = fixed_eval_indices(N_IMAGES, total=N_IMAGES)
+
+# curves reads attributions rather than computing them, so it has to name the
+# settings they were computed under. Omitting this is not a silent mismatch any
+# more -- curves_cell raises, which is what the key change bought.
+EXPLAIN_OPTIONS = {"ig_steps": IG_STEPS}
 
 
 @pytest.fixture
@@ -44,7 +54,9 @@ def fake_images(monkeypatch):
     labels = np.arange(N_IMAGES, dtype=np.int64) % 10
 
     def _fake(cell, clean_root, corrupt_root, indices=None):
-        return images.copy(), labels.copy()
+        if indices is None:
+            return images.copy(), labels.copy()
+        return images[indices].copy(), labels[indices].copy()
 
     monkeypatch.setattr("shiftprofile.predict.load_cell_images", _fake)
     monkeypatch.setattr("shiftprofile.data.load_cell_images", _fake)
@@ -63,7 +75,7 @@ def cell():
 
 
 def _run_predict(cell, model, cache):
-    return predict_cell(cell, model, "clean", "corrupt", cache, batch_size=2, device="cpu")
+    return predict_cell(cell, model, "clean", "corrupt", cache, batch_size=2, device="cpu", indices=INDICES)
 
 
 def test_full_chain_runs_and_caches_each_stage(fake_images, model, cell, tmp_path):
@@ -77,21 +89,23 @@ def test_full_chain_runs_and_caches_each_stage(fake_images, model, cell, tmp_pat
 
     attribution = explain_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
     assert attribution.shape == (N_IMAGES, 32, 32)
 
     model_curve, random_curve = curves_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", imputation="mean",
+        explainer="integrated_gradients", imputation="mean", indices=INDICES,
+        explain_options=EXPLAIN_OPTIONS,
     )
     assert model_curve.shape == random_curve.shape
     assert model_curve.shape[0] == N_IMAGES
 
     assert cache.has(
-        {**cell.spec(), "stage": "explain", "explainer": "integrated_gradients"},
+        explain_spec(cell, explainer="integrated_gradients", indices=INDICES,
+                     ig_steps=IG_STEPS),
         EXPLAIN_VERSION, kind="array",
-    ), "explain_cell did not write where fill.py will look for it"
+    ), "explain_cell did not write where its own spec builder points"
 
 
 def test_second_run_is_a_cache_hit_and_never_touches_the_model(
@@ -103,7 +117,7 @@ def test_second_run_is_a_cache_hit_and_never_touches_the_model(
     _run_predict(cell, model, cache)
     first = explain_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
 
     class Exploding(torch.nn.Module):
@@ -112,7 +126,7 @@ def test_second_run_is_a_cache_hit_and_never_touches_the_model(
 
     second = explain_cell(
         cell, Exploding(), "clean", "corrupt", cache,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
     np.testing.assert_array_equal(first, second)
 
@@ -127,10 +141,10 @@ def test_two_explainers_do_not_overwrite_each_other(fake_images, model, cell, tm
 
     ig = explain_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
     cam = explain_cell(
-        cell, model, "clean", "corrupt", cache, explainer="grad_cam",
+        cell, model, "clean", "corrupt", cache, explainer="grad_cam", indices=INDICES,
     )
 
     assert not np.array_equal(ig, cam), "two explainers produced identical maps"
@@ -138,7 +152,7 @@ def test_two_explainers_do_not_overwrite_each_other(fake_images, model, cell, tm
     # Re-read IG: it must still be IG, not whatever grad_cam wrote afterwards.
     ig_again = explain_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
     np.testing.assert_array_equal(ig, ig_again)
 
@@ -150,20 +164,23 @@ def test_two_imputations_do_not_overwrite_each_other(fake_images, model, cell, t
     _run_predict(cell, model, cache)
     explain_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
 
     mean_curve, _ = curves_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", imputation="mean",
+        explainer="integrated_gradients", imputation="mean", indices=INDICES,
+        explain_options=EXPLAIN_OPTIONS,
     )
     blur_curve, _ = curves_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", imputation="blur",
+        explainer="integrated_gradients", imputation="blur", indices=INDICES,
+        explain_options=EXPLAIN_OPTIONS,
     )
     mean_again, _ = curves_cell(
         cell, model, "clean", "corrupt", cache,
-        explainer="integrated_gradients", imputation="mean",
+        explainer="integrated_gradients", imputation="mean", indices=INDICES,
+        explain_options=EXPLAIN_OPTIONS,
     )
     np.testing.assert_array_equal(mean_curve, mean_again)
 
@@ -176,7 +193,7 @@ def test_explain_refuses_when_predictions_are_absent(fake_images, model, cell, t
     with pytest.raises(Exception) as excinfo:
         explain_cell(
             cell, model, "clean", "corrupt", cache,
-            explainer="integrated_gradients", ig_steps=IG_STEPS,
+            explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
         )
     assert "predict" in str(excinfo.value).lower()
 
@@ -187,7 +204,8 @@ def test_curves_refuses_when_attributions_are_absent(fake_images, model, cell, t
     with pytest.raises(Exception) as excinfo:
         curves_cell(
             cell, model, "clean", "corrupt", cache,
-            explainer="integrated_gradients", imputation="mean",
+            explainer="integrated_gradients", imputation="mean", indices=INDICES,
+        explain_options=EXPLAIN_OPTIONS,
         )
     assert "explain" in str(excinfo.value).lower() or "attribution" in str(excinfo.value).lower()
 
@@ -203,7 +221,7 @@ def test_cache_split_serves_the_chain_from_a_read_only_root(
     _run_predict(cell, model, seeded)
     explain_cell(
         cell, model, "clean", "corrupt", seeded,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
 
     working = ArtifactCache(tmp_path / "working", read_roots=[mounted])
@@ -214,16 +232,18 @@ def test_cache_split_serves_the_chain_from_a_read_only_root(
 
     reused = explain_cell(
         cell, Exploding(), "clean", "corrupt", working,
-        explainer="integrated_gradients", ig_steps=IG_STEPS,
+        explainer="integrated_gradients", ig_steps=IG_STEPS, indices=INDICES,
     )
     assert reused.shape == (N_IMAGES, 32, 32)
 
     # And new work lands in the writable root, never the mounted one.
     curves_cell(
         cell, model, "clean", "corrupt", working,
-        explainer="integrated_gradients", imputation="mean",
+        explainer="integrated_gradients", imputation="mean", indices=INDICES,
+        explain_options=EXPLAIN_OPTIONS,
     )
     assert working.resolve(
-        {**cell.spec(), "stage": "explain", "explainer": "integrated_gradients"},
+        explain_spec(cell, explainer="integrated_gradients", indices=INDICES,
+                     ig_steps=IG_STEPS),
         EXPLAIN_VERSION, kind="array",
     ).parent == mounted

@@ -145,6 +145,8 @@ class TestNotImplementedRecording:
 
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": [],
@@ -177,6 +179,8 @@ class TestNotImplementedRecording:
 
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],

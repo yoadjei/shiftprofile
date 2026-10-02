@@ -18,7 +18,9 @@ import pytest
 
 from shiftprofile.cache import ArtifactCache
 from shiftprofile.cells import Cell, CLEAN
+from shiftprofile.data import fixed_eval_indices
 from shiftprofile.fill import FillReport, load_config, fill
+from shiftprofile.predict import PREDICT_VERSION, predict_spec
 
 
 class TestRunManifest:
@@ -33,6 +35,7 @@ class TestRunManifest:
     def _config(self):
         return {
             "track": "vision",
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],
@@ -126,16 +129,16 @@ class TestRunManifest:
     def test_cached_units_are_recorded_so_a_resume_is_auditable(self, tmp_path):
         """A resumed session should say what it found, not just what it did."""
         from shiftprofile.fill import RunManifest
-        from shiftprofile.predict import PREDICT_VERSION
 
         cache = ArtifactCache(tmp_path / "cache")
         config = self._config()
+        indices = fixed_eval_indices(config["n_eval_images"])
         for family, severity in (("clean", 0), ("gaussian_noise", 1)):
             cell = Cell("vision", "resnet18", 0, family, severity)
             cache.put_array(
-                {**cell.spec(), "stage": "predict"},
+                predict_spec(cell, indices=indices),
                 PREDICT_VERSION,
-                np.zeros((4, 2)),
+                np.zeros((len(indices), 10), dtype=np.float32),
             )
 
         path = tmp_path / "manifest.jsonl"
@@ -149,9 +152,11 @@ class TestRunManifest:
         records = self._lines(path)
         skipped = [r for r in records if r["event"] == "skipped_cached"]
         assert len(skipped) == 2, "both pre-cached units should be recorded"
-        assert all(r["version"] == PREDICT_VERSION for r in skipped), (
-            "the version is what makes a skip auditable: it says which key hit"
-        )
+        assert all(r["stage"] == "predict" and r["cell_id"] for r in skipped)
+        # The producer version is deliberately absent: fill no longer knows it,
+        # because the stage module owns its own key. The cache's .spec.json
+        # sidecar is what records which version a given artifact was written at.
+        assert not any("version" in r for r in skipped)
         assert not [r for r in records if r["event"] == "started"]
 
 
@@ -180,6 +185,8 @@ class TestStageVersionsHaveOneSourceOfTruth:
 
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],
@@ -323,6 +330,8 @@ class TestFillBudgeting:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],
@@ -357,6 +366,8 @@ class TestFillBudgeting:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0, 1],  # 2 seeds = more cells
             "shift_families": ["gaussian_noise"],
@@ -396,6 +407,8 @@ class TestFillBudgeting:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],
@@ -442,6 +455,8 @@ class TestFillFailureHandling:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0, 1],
             "shift_families": ["gaussian_noise"],
@@ -480,27 +495,32 @@ class TestFillCaching:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],
             "severities": [1],
         }
 
-        # Pre-populate cache for ALL cells in this config
-        # This ensures the test verifies that cached cells are skipped
+        # Seed through predict's OWN key builder, with the same index set fill
+        # will resolve. A hand-built dict here is how a seeded artifact and the
+        # key the filler looks under came to differ in the first place.
+        indices = fixed_eval_indices(config["n_eval_images"])
         for model in config["models"]:
             for seed in config["seeds"]:
-                # Clean cell
-                cell = Cell(config["track"], model, seed, "clean", 0)
-                spec = {**cell.spec(), "stage": "predict"}
-                cache.put_array(spec, "predict-v1", np.zeros((10, 5)))
-
-                # Corrupted cells
+                cells_to_seed = [Cell(config["track"], model, seed, "clean", 0)]
                 for family in config["shift_families"]:
                     for severity in config["severities"]:
-                        cell = Cell(config["track"], model, seed, family, severity)
-                        spec = {**cell.spec(), "stage": "predict"}
-                        cache.put_array(spec, "predict-v1", np.zeros((10, 5)))
+                        cells_to_seed.append(
+                            Cell(config["track"], model, seed, family, severity)
+                        )
+                for cell in cells_to_seed:
+                    cache.put_array(
+                        predict_spec(cell, indices=indices),
+                        PREDICT_VERSION,
+                        np.zeros((len(indices), 10), dtype=np.float32),
+                    )
 
         call_count = {"predict": 0}
 
@@ -531,15 +551,22 @@ class TestFillIdempotency:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],
             "severities": [1],
         }
 
-        def record_stage(cell, cache, **kw):
-            spec = {**cell.spec(), "stage": "predict"}
-            cache.put_array(spec, "predict-v1", np.zeros((10, 5)))
+        def record_stage(cell, cache, *, indices, **kw):
+            # Written through predict's own key builder, so the second run looks
+            # under exactly the key the first run wrote.
+            cache.put_array(
+                predict_spec(cell, indices=indices),
+                PREDICT_VERSION,
+                np.zeros((len(indices), 10), dtype=np.float32),
+            )
             return {"ok": True}
 
         # First run
@@ -576,6 +603,8 @@ class TestFillStageOrdering:
         cache = ArtifactCache(tmp_path)
         config = {
             "track": "vision",
+
+            "n_eval_images": 8,
             "models": ["resnet18"],
             "seeds": [0],
             "shift_families": ["gaussian_noise"],

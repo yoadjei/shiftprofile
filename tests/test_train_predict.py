@@ -14,9 +14,19 @@ import torch.nn as nn
 from pathlib import Path
 
 from shiftprofile.train import train_spec, train_model, load_or_train, TRAIN_VERSION
-from shiftprofile.predict import predict_logits, predict_cell, PREDICT_VERSION
+from shiftprofile.data import fixed_eval_indices
+from shiftprofile.predict import (
+    PREDICT_VERSION,
+    predict_cell,
+    predict_logits,
+    predict_spec,
+)
 from shiftprofile.cache import ArtifactCache
 from shiftprofile.cells import Cell, stage_spec
+
+# The mocked loader returns 64 synthetic images, so the index set is drawn over
+# 64 rather than CIFAR's 10,000. predict_cell keys on it, so it has to be real.
+EVAL_INDICES = fixed_eval_indices(64, total=64)
 
 
 # Helpers for test data
@@ -426,6 +436,7 @@ class TestPredictCell:
                 corrupt_root="/tmp",
                 cache=cache,
                 device="cpu",
+                indices=EVAL_INDICES,
             )
 
         assert isinstance(logits, np.ndarray)
@@ -438,7 +449,7 @@ class TestPredictCell:
 
         # Manually create a cache entry
         fake_logits = np.random.randn(64, 10).astype(np.float32)
-        spec = stage_spec(cell, "predict")
+        spec = predict_spec(cell, indices=EVAL_INDICES)
         cache.put_array(spec, PREDICT_VERSION, fake_logits)
 
         # Create a model that raises if called
@@ -456,6 +467,7 @@ class TestPredictCell:
             corrupt_root="/tmp",
             cache=cache,
             device="cpu",
+            indices=EVAL_INDICES,
         )
 
         np.testing.assert_array_equal(logits, fake_logits)
@@ -466,7 +478,7 @@ class TestPredictCell:
         cache = ArtifactCache(tmp_path)
         cell = Cell(track="test", model_id="resnet18", seed=42, shift_family="clean", severity=0)
         model = make_stub_model()
-        spec = stage_spec(cell, "predict")
+        spec = predict_spec(cell, indices=EVAL_INDICES)
 
         # Before prediction, logits should not be cached
         assert not cache.has(spec, PREDICT_VERSION, kind="array")
@@ -484,6 +496,7 @@ class TestPredictCell:
                 corrupt_root="/tmp",
                 cache=cache,
                 device="cpu",
+                indices=EVAL_INDICES,
             )
 
         # After prediction, logits should be cached
@@ -509,6 +522,7 @@ class TestPredictCell:
                 corrupt_root="/tmp",
                 cache=cache,
                 device="cpu",
+                indices=EVAL_INDICES,
             )
 
             # Second call loads from cache
@@ -519,6 +533,7 @@ class TestPredictCell:
                 corrupt_root="/tmp",
                 cache=cache,
                 device="cpu",
+                indices=EVAL_INDICES,
             )
 
         # They should be exactly equal
