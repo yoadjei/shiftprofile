@@ -66,6 +66,26 @@ def predict_logits(
     return logits
 
 
+def predict_spec(cell: Cell, *, indices: np.ndarray) -> dict:
+    """The cache key for this cell's logits. The only place it is built.
+
+    `fill` used to construct this itself, which is how a key and the artifact
+    written under it drifted apart. Each stage module now owns its own key, so
+    there is one definition to get right rather than two to keep in step.
+    """
+    from .data import eval_digest
+
+    return stage_spec(cell, "predict", evaluated=eval_digest(indices))
+
+
+def predict_is_cached(cell: Cell, cache: ArtifactCache, *, indices: np.ndarray) -> bool:
+    """Whether this cell's logits are already on disk.
+
+    `fill` asks this instead of building a key and calling `cache.has` itself.
+    """
+    return cache.has(predict_spec(cell, indices=indices), PREDICT_VERSION, kind="array")
+
+
 def predict_cell(
     cell: Cell,
     model: nn.Module,
@@ -73,9 +93,9 @@ def predict_cell(
     corrupt_root: str,
     cache: ArtifactCache,
     *,
+    indices: np.ndarray,
     batch_size: int = 512,
     device: str = "cpu",
-    indices: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Predict logits for a cell, checking cache first.
 
@@ -85,14 +105,19 @@ def predict_cell(
         clean_root: Root directory for clean CIFAR-10 data.
         corrupt_root: Root directory for CIFAR-10-C data.
         cache: ArtifactCache for storing/loading logits.
+        indices: REQUIRED. The images to evaluate, from
+                 `fixed_eval_indices(n_eval_images)`. Part of the cache key, so
+                 logits over different index sets cannot collide. It was once
+                 optional and defaulted to None, which meant every run silently
+                 scored the whole 10,000-image test set while the configs asked
+                 for 1,000 and the key recorded neither.
         batch_size: Batch size for inference.
         device: Device to run on.
-        indices: Optional array of indices to select from the data.
 
     Returns:
-        Logits array of shape (n, 10) with dtype float32.
+        Logits array of shape (len(indices), 10) with dtype float32.
     """
-    spec = stage_spec(cell, "predict")
+    spec = predict_spec(cell, indices=indices)
 
     # Check cache first
     if cache.has(spec, PREDICT_VERSION, kind="array"):
