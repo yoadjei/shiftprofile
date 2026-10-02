@@ -21,18 +21,38 @@ from typing import Any, Callable, Optional
 import yaml
 
 from .cache import ArtifactCache
-from .cells import Cell, enumerate_cells, worklist, CLEAN, stage_spec
+from .cells import Cell, enumerate_cells
 
 
 @dataclass(frozen=True)
 class StageSpec:
-    """Specification for a pipeline stage and how it caches artifacts."""
+    """How a stage fans out, and who to ask whether a unit is already done.
+
+    `version` and `kind` used to live here, which meant the filler held a second
+    copy of facts the stage module owned and could disagree with it. It did: the
+    curves key built here omitted the `which` axis that `curves_cell` writes
+    under, so the check could never hit. `is_cached` replaces both -- the stage
+    module answers the question, because the stage module is what knows.
+    """
 
     name: str
-    version: str
-    kind: str  # "array" or "record"
     per_explainer: bool  # does this stage fan out over explainers?
     per_imputation: bool  # does it also fan out over imputation schemes?
+    is_cached: Optional[Callable[..., bool]] = None
+    """`(cell, cache, **axes) -> bool`, from the stage module. None in tests that
+    inject their own stages and want every unit treated as missing."""
+    computes_attributions: bool = False
+    """True for the stage that produces attributions. It receives the resolved
+    options expanded as keywords, because that is how it is parameterised."""
+    reads_attributions: bool = False
+    """True for a stage that looks attributions up instead of computing them. It
+    receives the same options as one dict, naming which attributions it wants.
+
+    Two fields rather than one flag because the two stages need the same options
+    in different shapes, and the translation belongs here -- resolved once -- not
+    in each caller. curves_cell once looked attributions up under explain's
+    DEFAULT options, so a run attributing at 4 IG steps had its curves hunt for
+    the 32-step artifact and miss on every unit, forever."""
 
 
 class RunManifest:
@@ -162,6 +182,7 @@ def fill(
     stages: tuple[str, ...] = ("predict", "explain", "curves"),
     progress: Optional[Callable[[str, str], None]] = None,
     stages_impl: Optional[dict[str, Callable]] = None,
+    is_cached_impl: Optional[dict[str, Callable]] = None,
     manifest: Optional["RunManifest"] = None,
     now: Callable[[], float] = time.monotonic,
 ) -> FillReport:
@@ -188,6 +209,10 @@ def fill(
                      If not provided, uses the default implementations from
                      predict.py, explain.py, curves.py (which require real
                      data and models and are not available in pure CPU mode).
+        is_cached_impl: Optional dict {stage_name: predicate} for testing, where
+                     each predicate is `(cell, cache, **axes) -> bool`. Defaults
+                     to the real `<stage>_is_cached` from each stage module. A
+                     stage with no predicate has every unit treated as missing.
         manifest: Optional RunManifest. Each unit is recorded as it starts and
                   again as it ends, with its duration, so a preempted session
                   leaves a readable account of what it did and what cost what.
@@ -200,32 +225,77 @@ def fill(
     if stages_impl is None:
         stages_impl = {}
 
-    # Imported from the stage modules rather than written out again here. The
-    # filler decides whether an artifact is already cached and the stage module
-    # decides what to write it as, so a second copy of a version string is a
-    # producer/consumer mismatch waiting to happen: bump one, and the filler
-    # looks for a key nothing ever writes, misses every time, and recomputes
-    # the whole stage on every run while reporting success. Imported inside the
-    # function because these modules pull in torch, which the fill tests that
-    # supply their own stages_impl should not have to pay for.
-    from .curves import CURVES_VERSION
-    from .explain import EXPLAIN_VERSION
-    from .predict import PREDICT_VERSION
+    # Each stage module answers "is this unit done?" itself. The filler used to
+    # build the key and ask the cache directly, holding a second copy of facts the
+    # module owned -- and disagreeing with it, because the curves key built here
+    # omitted the `which` axis curves_cell writes under, so the check could never
+    # hit and a resumed run re-reported every curve as freshly completed.
+    # Imported inside the function because these modules pull in torch, which the
+    # tests that inject their own stages should not have to pay for.
+    if is_cached_impl is None:
+        from .curves import curves_is_cached
+        from .explain import explain_is_cached
+        from .predict import predict_is_cached
+
+        is_cached_impl = {
+            "predict": predict_is_cached,
+            "explain": explain_is_cached,
+            "curves": curves_is_cached,
+        }
 
     stage_specs = {
-        "predict": StageSpec("predict", PREDICT_VERSION, "array", per_explainer=False, per_imputation=False),
-        "explain": StageSpec("explain", EXPLAIN_VERSION, "array", per_explainer=True, per_imputation=False),
-        "curves": StageSpec("curves", CURVES_VERSION, "array", per_explainer=True, per_imputation=True),
+        "predict": StageSpec("predict", per_explainer=False, per_imputation=False,
+                             is_cached=is_cached_impl.get("predict")),
+        "explain": StageSpec("explain", per_explainer=True, per_imputation=False,
+                             is_cached=is_cached_impl.get("explain"),
+                             computes_attributions=True),
+        "curves": StageSpec("curves", per_explainer=True, per_imputation=True,
+                            is_cached=is_cached_impl.get("curves"),
+                            reads_attributions=True),
     }
 
     report = FillReport()
     start_time = now()
     budget_seconds = budget_minutes * 60
 
+    # Resolve the evaluation set ONCE, for every stage and every cell. Required,
+    # never defaulted: `n_eval_images` sat in both configs and reached no producer
+    # at all, so every run scored the whole 10,000-image test set while the
+    # protocol asked for 1,000 and the cache key recorded neither. A default here
+    # would restore exactly that silence, so a config without the key is an error.
+    if "n_eval_images" not in config:
+        raise ValueError(
+            "config has no 'n_eval_images'. It decides how many images every "
+            "artifact is computed over and is part of every cache key, so there "
+            "is no safe default: guessing would silently produce artifacts that "
+            "do not match the registered protocol."
+        )
+    from .data import fixed_eval_indices
+
+    indices = fixed_eval_indices(config["n_eval_images"])
+
+    # Resolved once, from the config, for every stage that computes attributions
+    # and every stage that reads them. One source, so a curve cannot be looked up
+    # under settings its attributions were not computed with.
+    explain_options = {}
+    if "ig_steps" in config:
+        explain_options["ig_steps"] = config["ig_steps"]
+
     # Enumerate cells from config
     all_cells = enumerate_cells(config, config["track"])
     explainers = config.get("explainers", [])
-    imputations = config.get("imputations", ["mean"])  # Default to mean if not specified
+
+    # Both configs spell this `imputation` (singular) while this read it as
+    # `imputations`, so the key was never looked at: a config asking for `blur`
+    # would have silently run `mean`. The values happened to agree, which is the
+    # only reason it never showed. Both spellings are accepted now, singular as
+    # the one scheme the frozen protocol uses and plural as E6's list.
+    if "imputations" in config:
+        imputations = config["imputations"]
+    elif "imputation" in config:
+        imputations = [config["imputation"]]
+    else:
+        imputations = ["mean"]
 
     # Process each stage
     for stage_name in stages:
@@ -245,28 +315,37 @@ def fill(
                 imputation_list = imputations if spec.per_imputation else [None]
 
                 for imputation in imputation_list:
-                    # Build the spec for this work unit
-                    cell_spec = stage_spec(cell, spec.name)
+                    # The axes this unit fans out over. The same dict goes to the
+                    # stage module's predicate and to the stage itself, so what is
+                    # checked and what is computed cannot be different units.
+                    axes = {"indices": indices}
                     if spec.per_explainer:
-                        cell_spec["explainer"] = explainer
+                        axes["explainer"] = explainer
                     if spec.per_imputation:
-                        cell_spec["imputation"] = imputation
+                        axes["imputation"] = imputation
+                    # The producer is parameterised by these; the consumer is
+                    # identified by them. Same dict, resolved once, shaped here so
+                    # no stage or test stub has to remember which form it needs.
+                    if spec.computes_attributions:
+                        axes.update(explain_options)
+                    if spec.reads_attributions:
+                        axes["explain_options"] = explain_options
 
-                    # Check cache
-                    if cache.has(cell_spec, spec.version, kind=spec.kind):
-                        # Build cell_id string
-                        cell_id = f"{spec.name}:{cell.model_id}:{cell.seed}:{cell.shift_family}:{cell.severity}"
-                        if spec.per_explainer:
-                            cell_id += f":{explainer}"
-                        if spec.per_imputation:
-                            cell_id += f":{imputation}"
+                    cell_id = f"{spec.name}:{cell.model_id}:{cell.seed}:{cell.shift_family}:{cell.severity}"
+                    if spec.per_explainer:
+                        cell_id += f":{explainer}"
+                    if spec.per_imputation:
+                        cell_id += f":{imputation}"
+
+                    # Ask the stage module, which owns its key, rather than
+                    # building one here and asking the cache.
+                    if spec.is_cached is not None and spec.is_cached(cell, cache, **axes):
                         report.skipped_cached.append(cell_id)
                         if manifest:
                             manifest.record(
                                 event="skipped_cached",
                                 stage=spec.name,
                                 cell_id=cell_id,
-                                version=spec.version,
                             )
                         continue
 
@@ -282,13 +361,6 @@ def fill(
                                 elapsed_seconds=round(report.elapsed_seconds, 3),
                             )
                         return report
-
-                    # Build cell_id string
-                    cell_id = f"{spec.name}:{cell.model_id}:{cell.seed}:{cell.shift_family}:{cell.severity}"
-                    if spec.per_explainer:
-                        cell_id += f":{explainer}"
-                    if spec.per_imputation:
-                        cell_id += f":{imputation}"
 
                     # Handle missing implementation
                     if stage_fn is None:
@@ -309,14 +381,9 @@ def fill(
                         if progress:
                             progress(spec.name, cell_id)
 
-                        # Call stage function with appropriate kwargs
-                        kw = {"device": device}
-                        if spec.per_explainer:
-                            kw["explainer"] = explainer
-                        if spec.per_imputation:
-                            kw["imputation"] = imputation
-
-                        stage_fn(cell, cache, **kw)
+                        # The same axes the predicate was asked about, so the unit
+                        # computed is the unit that was found missing.
+                        stage_fn(cell, cache, device=device, **axes)
 
                         report.completed.append(cell_id)
                         if manifest:
@@ -470,6 +537,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
 
     def explain_stage(cell, cache, device="cpu", explainer=None, **kw):
+        # ig_steps and friends arrive in kw already, resolved once by fill from the
+        # config and handed to curves as well, so the settings an attribution is
+        # computed under are the settings curves looks it up by.
         return explain_cell(
             cell, model_for(cell), clean_root, corrupt_root, cache,
             explainer=explainer, device=device, **kw
@@ -504,6 +574,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             device=device,
             budget_minutes=args.budget_minutes,
             stages=list(args.stages),
+            # Recorded because it is part of every artifact's key: a manifest
+            # spanning sessions must say which evaluation set each run used.
+            n_eval_images=config.get("n_eval_images"),
+            ig_steps=config.get("ig_steps"),
             # Wall-clock, unlike the monotonic clock used for durations. A
             # manifest spanning several preempted sessions is unreadable
             # without knowing which day each run happened.
