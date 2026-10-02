@@ -326,6 +326,175 @@ def test_explain_batch_device_propagation():
 
 
 # ============================================================================
+# Batching
+# ============================================================================
+
+class TestBatchingDoesNotChangeResults:
+    """The optimisation is only valid if the numbers are the same.
+
+    explain_batch dispatched one image at a time until the explainers learned
+    to take a target per image. That made a pilot IG cell take 55 minutes on a
+    T4 and put the full grid at roughly 220 GPU-hours for this stage. Batching
+    is worth nothing if it quietly changes what is being measured, so these
+    compare the batched result against the old one-at-a-time path directly.
+    """
+
+    @pytest.mark.parametrize("explainer", ["integrated_gradients", "grad_cam"])
+    def test_an_image_gets_the_same_attribution_alone_or_in_a_batch(self, explainer):
+        """The property batching has to preserve.
+
+        Not "batch 1 equals batch 4" -- see the note on batch size 1 below.
+        What must hold is that an image's attribution does not depend on what
+        it was batched with, which is what makes a chunked run equivalent to
+        the per-image one it replaced.
+        """
+        model = resnet18_cifar().eval()
+        torch.manual_seed(0)
+        images = torch.randn(7, 3, 32, 32)
+        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2])
+
+        alone = explain_batch(
+            model, images[2:3], targets[2:3], explainer=explainer, batch_size=4
+        )
+        embedded = explain_batch(
+            model, images, targets, explainer=explainer, batch_size=7
+        )[2:3]
+
+        np.testing.assert_allclose(embedded, alone, rtol=1e-4, atol=1e-5)
+
+    @pytest.mark.parametrize("explainer", ["integrated_gradients", "grad_cam"])
+    def test_the_chunk_size_does_not_change_the_result(self, explainer):
+        model = resnet18_cifar().eval()
+        torch.manual_seed(0)
+        images = torch.randn(7, 3, 32, 32)
+        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2])
+
+        in_twos = explain_batch(
+            model, images, targets, explainer=explainer, batch_size=2
+        )
+        in_one_go = explain_batch(
+            model, images, targets, explainer=explainer, batch_size=7
+        )
+
+        np.testing.assert_allclose(in_twos, in_one_go, rtol=1e-4, atol=1e-5)
+
+    def test_batch_size_one_is_the_odd_one_out_and_that_is_why_v2_exists(self):
+        """Documents the measurement behind the EXPLAIN_VERSION bump.
+
+        Every chunk size from 2 up agrees to around 1e-7 relative. Batch size
+        1 does not: torch special-cases the degenerate batch to a different
+        convolution algorithm, and IG accumulates that over its steps to about
+        5e-3 relative on resnet18. A shallow model shows 1e-10 throughout, so
+        this is kernel selection rather than anything about the maths.
+
+        It matters because the superseded code path WAS batch size 1. Keeping
+        explain-v1 would have let a resumed run pair those attributions with
+        batched ones, differing by half a percent for no recorded reason.
+        """
+        model = resnet18_cifar().eval()
+        torch.manual_seed(0)
+        images = torch.randn(7, 3, 32, 32)
+        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2])
+
+        def ig(batch_size):
+            return explain_batch(
+                model, images, targets,
+                explainer="integrated_gradients", batch_size=batch_size,
+            )
+
+        scale = np.abs(ig(7)).max()
+        assert np.abs(ig(2) - ig(7)).max() / scale < 1e-5, "chunk sizes 2+ agree"
+        assert np.abs(ig(1) - ig(7)).max() / scale > 1e-4, (
+            "batch size 1 no longer differs; if torch stopped special-casing it, "
+            "say so here rather than deleting the test -- the version bump was "
+            "justified by this difference"
+        )
+
+    def test_a_partial_final_chunk_is_handled(self):
+        """7 images at batch size 4 leaves a chunk of 3."""
+        model = _tiny_model().eval()
+        images = torch.randn(7, 3, 32, 32)
+        targets = torch.tensor([0, 1, 2, 3, 4, 5, 6])
+
+        attr = explain_batch(
+            model, images, targets, explainer="integrated_gradients", batch_size=4
+        )
+        assert attr.shape == (7, 32, 32)
+
+    def test_each_image_is_attributed_against_its_own_target(self):
+        """The reason the old code could not batch.
+
+        integrated_gradients took one scalar target and applied it to the whole
+        batch, so attributing images against different classes meant one call
+        per image. A batch that silently used the first image's class for all
+        of them would pass a shape check and be wrong everywhere.
+        """
+        model = _tiny_model().eval()
+        images = torch.randn(2, 3, 32, 32)
+
+        together = explain_batch(
+            model, images, torch.tensor([0, 7]),
+            explainer="integrated_gradients", batch_size=2,
+        )
+        separately = np.concatenate([
+            integrated_gradients(model, images[0:1], target=0),
+            integrated_gradients(model, images[1:2], target=7),
+        ])
+
+        np.testing.assert_allclose(together, separately, rtol=1e-4, atol=1e-5)
+
+        shared_target = explain_batch(
+            model, images, torch.tensor([0, 0]),
+            explainer="integrated_gradients", batch_size=2,
+        )
+        assert not np.allclose(together[1], shared_target[1]), (
+            "image 1 attributed identically against class 7 and class 0, so the "
+            "per-image target is not reaching the model"
+        )
+
+
+class TestPerImageTargets:
+    """A scalar still broadcasts, so single-target call sites keep working."""
+
+    @pytest.mark.parametrize("explainer_fn", [integrated_gradients, grad_cam])
+    def test_scalar_target_broadcasts_over_the_batch(self, explainer_fn):
+        model = resnet18_cifar().eval()
+        images = torch.randn(3, 3, 32, 32)
+
+        scalar = explainer_fn(model, images, target=2)
+        vector = explainer_fn(model, images, target=torch.tensor([2, 2, 2]))
+
+        np.testing.assert_allclose(scalar, vector, rtol=1e-4, atol=1e-6)
+
+    def test_mismatched_target_count_is_rejected(self):
+        model = _tiny_model().eval()
+        images = torch.randn(3, 3, 32, 32)
+
+        with pytest.raises(ValueError, match="2 targets for 3 images"):
+            integrated_gradients(model, images, target=torch.tensor([0, 1]))
+
+    def test_explain_batch_rejects_a_mismatched_target_count(self):
+        model = _tiny_model().eval()
+        images = torch.randn(3, 3, 32, 32)
+
+        with pytest.raises(ValueError, match="must match"):
+            explain_batch(
+                model, images, torch.tensor([0, 1]),
+                explainer="integrated_gradients",
+            )
+
+    def test_a_nonsense_batch_size_is_rejected(self):
+        model = _tiny_model().eval()
+        images = torch.randn(2, 3, 32, 32)
+
+        with pytest.raises(ValueError, match="at least 1"):
+            explain_batch(
+                model, images, torch.tensor([0, 1]),
+                explainer="integrated_gradients", batch_size=0,
+            )
+
+
+# ============================================================================
 # to_common_grid Tests
 # ============================================================================
 
@@ -417,7 +586,7 @@ def test_ig_completeness_error_different_baselines():
 
 def test_explain_version_defined():
     """EXPLAIN_VERSION should be defined."""
-    assert EXPLAIN_VERSION == "explain-v1"
+    assert EXPLAIN_VERSION == "explain-v2"
 
 
 def test_ig_steps_constant():
