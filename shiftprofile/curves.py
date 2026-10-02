@@ -21,13 +21,19 @@ Key design decisions:
 
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from shiftprofile.metrics.faithfulness import VALID_IMPUTATIONS
 
-CURVES_VERSION = "curves-v1"
+# Bumped alongside explain-v2: a curve's key now names the evaluation index set,
+# the two upstream versions it reads, and which attributions it was built from.
+# Curves written under curves-v1 recorded none of that, so they cannot be told
+# apart from curves over a different eval set or a different IG baseline.
+CURVES_VERSION = "curves-v2"
 REMOVAL_FRACTIONS = (0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0)
 
 
@@ -333,6 +339,99 @@ def paired_removal_curves(
     return model_curve, random_curve
 
 
+def curves_spec(
+    cell,
+    *,
+    explainer: str,
+    imputation: str,
+    which: str,
+    indices: np.ndarray,
+    control_seed: int = 0,
+    explain_options: Optional[dict] = None,
+) -> dict:
+    """The cache key for one of this cell's two removal curves.
+
+    A curve is identified by `which`: the model's attribution or the random
+    control. Both are written per work unit, which is why `curves_is_cached`
+    exists -- `fill` once built this key WITHOUT `which` and so could never find
+    either artifact, reporting thirty curves "completed" every resumed run while
+    `curves_cell` short-circuited and did nothing.
+
+    `inputs` names both upstream versions read. Attributions are the input the
+    curve is computed from, so an `explain` bump must invalidate the curve; it
+    previously did not, which left curves derived from attributions that had been
+    recomputed out from under them.
+
+    `explain_options` is in `explain_spec`'s vocabulary (`ig_steps`, `baseline`,
+    `random_seed`) and is normalised through `explainer_options` before going into
+    the key, so two spellings of the same settings hash to one artifact and the
+    dict recorded here is the same one `explain_spec` recorded.
+    """
+    from .cells import stage_spec
+    from .data import eval_digest
+    from .explain import EXPLAIN_VERSION, explainer_options
+    from .predict import PREDICT_VERSION
+
+    if which not in ("model", "random"):
+        raise ValueError(f"which must be 'model' or 'random', got {which!r}")
+
+    return stage_spec(
+        cell,
+        "curves",
+        explainer=explainer,
+        imputation=imputation,
+        which=which,
+        # The random control curve is drawn from this seed, so it determines the
+        # contents of the artifact that `relative_faithfulness` subtracts. Named
+        # `control_seed`, not `random_seed`: explain_cell has a `random_seed` too
+        # and it means something else entirely -- the seed of the `random`
+        # EXPLAINER. Two different quantities under one name in adjacent stages is
+        # a mistake waiting to be made.
+        control_seed=control_seed,
+        # Which attributions this curve was computed from. A curve built on
+        # black-baseline attributions is not the curve built on blur-baseline
+        # ones, and E6 varies exactly that, so without this the ablation's curves
+        # would collide with the frozen protocol's.
+        explain_options=explainer_options(explainer, **(explain_options or {})),
+        evaluated=eval_digest(indices),
+        inputs={"explain": EXPLAIN_VERSION, "predict": PREDICT_VERSION},
+    )
+
+
+def curves_is_cached(
+    cell,
+    cache,
+    *,
+    explainer: str,
+    imputation: str,
+    indices: np.ndarray,
+    control_seed: int = 0,
+    explain_options: Optional[dict] = None,
+) -> bool:
+    """Whether BOTH of this unit's curves are on disk.
+
+    One of the two is not a result. `relative_faithfulness` is the random
+    control's AUC minus the model's, so a unit holding only one curve has nothing
+    to report and must be recomputed.
+    """
+    return all(
+        cache.has(
+            curves_spec(
+                cell,
+                explainer=explainer,
+                imputation=imputation,
+                which=which,
+                indices=indices,
+                control_seed=control_seed,
+                explain_options=explain_options,
+            ),
+            CURVES_VERSION,
+            kind="array",
+        )
+        for which in ("model", "random")
+    )
+
+
 def curves_cell(
     cell,  # Cell object
     model: torch.nn.Module,
@@ -342,9 +441,10 @@ def curves_cell(
     *,
     explainer: str,
     imputation: str,
+    indices: np.ndarray,
     device: str = "cpu",
-    indices: np.ndarray | None = None,
-    random_seed: int = 0,
+    control_seed: int = 0,
+    explain_options: Optional[dict] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute removal curves for a cell, checking cache first.
 
@@ -362,28 +462,30 @@ def curves_cell(
         cache: ArtifactCache for storing/loading curves.
         explainer: Name of explainer that produced the attributions.
         imputation: Imputation scheme for removed pixels.
+        indices: REQUIRED. The images to evaluate, from
+                 `fixed_eval_indices(n_eval_images)`. Part of the cache key, and
+                 must be the same set the attributions were computed over.
         device: Device to run on.
-        indices: Optional array of indices to select from the data.
         random_seed: Seed for random control generation.
 
     Returns:
-        Tuple (model_curve, random_curve), each of shape (n_samples, n_fractions).
+        Tuple (model_curve, random_curve), each of shape (len(indices), n_fractions).
 
     Raises:
         ValueError: If attributions are not cached.
     """
     from .data import load_cell_images, to_normalised_tensor
-    from .explain import EXPLAIN_VERSION
+    from .explain import EXPLAIN_VERSION, explain_spec
 
-    # Build cache keys for both model and random control curves
-    from .cells import stage_spec
-
-    model_curve_spec = stage_spec(
-        cell, "curves", explainer=explainer, imputation=imputation, which="model"
+    key = dict(
+        explainer=explainer,
+        imputation=imputation,
+        indices=indices,
+        control_seed=control_seed,
+        explain_options=explain_options,
     )
-    random_curve_spec = stage_spec(
-        cell, "curves", explainer=explainer, imputation=imputation, which="random"
-    )
+    model_curve_spec = curves_spec(cell, which="model", **key)
+    random_curve_spec = curves_spec(cell, which="random", **key)
 
     # Check cache for both curves
     model_cached = cache.has(model_curve_spec, CURVES_VERSION, kind="array")
@@ -403,28 +505,37 @@ def curves_cell(
         indices=indices,
     )
 
-    # Load attributions from explain stage
-    explain_spec = stage_spec(cell, "explain", explainer=explainer)
-    if not cache.has(explain_spec, EXPLAIN_VERSION, kind="array"):
+    # Read both upstream artifacts through their OWN key builders. The versions
+    # these two names resolve to are the same ones recorded in `inputs` above, so
+    # what the curve was derived from and what its key claims cannot drift apart.
+    from .predict import PREDICT_VERSION, predict_spec
+
+    # Named explicitly rather than rebuilt from defaults. curves_cell once looked
+    # up attributions with explain's DEFAULT options, so a run that attributed at
+    # 4 IG steps had its curves look for the 32-step artifact and miss forever.
+    attribution_key = explain_spec(
+        cell, explainer=explainer, indices=indices, **(explain_options or {})
+    )
+    if not cache.has(attribution_key, EXPLAIN_VERSION, kind="array"):
         raise ValueError(
-            f"curves_cell requires cached attributions for cell {cell} and "
-            f"explainer {explainer!r}. Run explain stage first."
+            f"curves_cell requires cached attributions for cell {cell}, explainer "
+            f"{explainer!r}, over the same {len(indices)} evaluation images. Run "
+            f"the explain stage first with the same n_eval_images."
         )
 
-    # Load predictions to determine target class
-    from .predict import PREDICT_VERSION
-    predict_spec = stage_spec(cell, "predict")
-    if not cache.has(predict_spec, PREDICT_VERSION, kind="array"):
+    prediction_key = predict_spec(cell, indices=indices)
+    if not cache.has(prediction_key, PREDICT_VERSION, kind="array"):
         raise ValueError(
-            f"curves_cell requires cached predictions for cell {cell}. "
-            f"Run predict stage first."
+            f"curves_cell requires cached predictions for cell {cell} over the "
+            f"same {len(indices)} evaluation images. Run the predict stage first "
+            f"with the same n_eval_images."
         )
 
-    logits = cache.get_array(predict_spec, PREDICT_VERSION)
+    logits = cache.get_array(prediction_key, PREDICT_VERSION)
     predicted_classes = np.argmax(logits, axis=1)
 
     # Load attributions (stored as float16, convert back to float32)
-    attributions_fp16 = cache.get_array(explain_spec, EXPLAIN_VERSION)
+    attributions_fp16 = cache.get_array(attribution_key, EXPLAIN_VERSION)
     attributions = attributions_fp16.astype(np.float32)
 
     # Convert to tensors
@@ -440,7 +551,7 @@ def curves_cell(
         attributions_tensor,
         targets_tensor,
         imputation=imputation,
-        random_seed=random_seed,
+        random_seed=control_seed,
         device=device,
     )
 
