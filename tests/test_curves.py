@@ -105,13 +105,10 @@ def test_impute_full_mask_modifies_all_pixels():
 
     for scheme in VALID_IMPUTATIONS:
         result = impute(image, mask, scheme, seed=0)
-        # Result should have modified values (won't be identical to original)
-        # For "zero", all should be zero; for others, should differ
-        if scheme == "zero":
-            torch.testing.assert_close(result, torch.zeros_like(result))
-        else:
-            # At least some values should differ
-            assert not torch.allclose(result, image)
+        # Every scheme must actually change a fully masked image.
+        assert not torch.allclose(result, image), (
+            f"{scheme!r} left a fully masked image unchanged"
+        )
 
 
 def test_impute_partial_mask_preserves_unmasked():
@@ -173,13 +170,63 @@ def test_impute_uniform_noise_different_seed_differs():
     assert not torch.allclose(result1, result2)
 
 
-def test_impute_zero_scheme():
-    """'zero' imputation should set masked pixels to 0."""
+def test_impute_black_is_black_in_pixel_space_not_normalised_zero():
+    """The scheme that replaced `zero`, and why it had to.
+
+    `zero` filled with normalised zero, which IS the dataset mean, so it ran the
+    same line as `mean` and duplicated it exactly. The E6 sweep proved it: the
+    two agreed to five decimals on all 120 curves, which two distinct schemes
+    cannot do by chance, so the ablation reported four arms and varied three.
+
+    Black in PIXEL space is what was wanted, and normalisation maps it to
+    -mean/std, about -1.99 per channel.
+    """
+    from shiftprofile.data.cifar import CIFAR10_MEAN, CIFAR10_STD
+
     image = torch.ones(1, 3, 32, 32)
     mask = torch.ones(1, 32, 32, dtype=torch.bool)
 
-    result = impute(image, mask, "zero", seed=0)
-    torch.testing.assert_close(result, torch.zeros_like(result))
+    result = impute(image, mask, "black", seed=0)
+    expected = torch.tensor(
+        [-m / s for m, s in zip(CIFAR10_MEAN, CIFAR10_STD)]
+    ).view(1, 3, 1, 1).expand_as(image)
+    torch.testing.assert_close(result, expected)
+    assert not torch.allclose(result, torch.zeros_like(result)), (
+        "black collapsed to normalised zero, which is the mean -- the exact "
+        "degeneracy that made E6's fourth arm a duplicate"
+    )
+
+
+def test_black_and_mean_are_genuinely_different_schemes():
+    """The property whose absence invalidated an ablation arm."""
+    image = torch.randn(1, 3, 32, 32)
+    mask = torch.ones(1, 32, 32, dtype=torch.bool)
+
+    assert not torch.allclose(
+        impute(image, mask, "mean", seed=0),
+        impute(image, mask, "black", seed=0),
+    )
+
+
+def test_the_retired_zero_scheme_is_refused_with_its_reason():
+    """Refused, not aliased. An alias keeps the degenerate arm reachable, and a
+    cached `zero` curve is a `mean` curve filed under another name."""
+    image = torch.ones(1, 3, 32, 32)
+    mask = torch.ones(1, 32, 32, dtype=torch.bool)
+
+    with pytest.raises(ValueError, match="retired"):
+        impute(image, mask, "zero", seed=0)
+
+
+def test_relative_faithfulness_also_refuses_the_retired_scheme():
+    """Both entry points, or a curve could be computed under one and scored
+    under the other."""
+    from shiftprofile.metrics.faithfulness import relative_faithfulness
+
+    fractions = np.array([0.0, 0.5, 1.0])
+    curve = np.array([1.0, 0.5, 0.0])
+    with pytest.raises(ValueError, match="retired"):
+        relative_faithfulness(curve, curve, fractions, imputation="zero")
 
 
 def test_impute_invalid_scheme_raises():
