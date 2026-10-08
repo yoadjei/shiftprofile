@@ -19,6 +19,11 @@
 # measurement-validity one. If it stays negative everywhere, removal-based
 # faithfulness is unusable on 32x32 inputs and the metric itself must change.
 #
+# The fourth arm is `black`, not `zero`. The first sweep ran `zero`, which filled
+# with normalised zero -- the dataset mean -- so it duplicated `mean` to five
+# decimals on all 120 curves and the ablation varied three schemes while
+# reporting four. `black` is black in pixel space, about -1.99 per channel.
+#
 # Either way this is the pre-registered P3 failure branch, not a repair.
 name: pilot_e6_imputations
 track: vision
@@ -46,4 +51,4 @@ imputations:
 - mean
 - blur
 - uniform_noise
-- zero
+- black
