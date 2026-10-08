@@ -1,0 +1,49 @@
+# E6 imputation sweep over the pilot grid.
+#
+# The pilot found faithfulness NEGATIVE under `mean` for every explainer: both
+# Integrated Gradients and Grad-CAM scored worse than the random control at
+# every severity, while the random EXPLAINER sat at -0.00006 -- so the machinery
+# is sound and the result is a property of the measurement.
+#
+# The ordering is the tell. Grad-CAM (-0.29) is worse than IG (-0.11) is worse
+# than random (~0), which is exactly the order of how spatially contiguous each
+# attribution map is. Grad-CAM's map is 4x4 -- sixteen values bilinearly
+# upsampled to 1024 pixels -- so its "top 5%" is one smooth blob, and replacing
+# a contiguous patch with the channel mean disturbs the model far less than
+# scattering mean-valued pixels does. The metric is reading mask geometry.
+#
+# This config varies only the imputation scheme. Attributions are already cached
+# and are NOT recomputed: the explain stage's key does not include the
+# imputation, so only the curves stage re-runs. If the sign flips under `blur`
+# or `uniform_noise`, the metric is imputation-dependent and the finding is a
+# measurement-validity one. If it stays negative everywhere, removal-based
+# faithfulness is unusable on 32x32 inputs and the metric itself must change.
+#
+# Either way this is the pre-registered P3 failure branch, not a repair.
+name: pilot_e6_imputations
+track: vision
+models:
+- resnet18
+seeds:
+- 0
+shift_families:
+- gaussian_noise
+- defocus_blur
+- fog
+severities:
+- 1
+- 3
+- 5
+explainers:
+- integrated_gradients
+- grad_cam
+- random
+n_eval_images: 1000
+ig_steps: 32
+epochs: 50
+batch_size: 256
+imputations:
+- mean
+- blur
+- uniform_noise
+- zero
