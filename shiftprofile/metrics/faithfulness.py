@@ -19,7 +19,23 @@ from __future__ import annotations
 
 import numpy as np
 
-VALID_IMPUTATIONS = ("mean", "blur", "uniform_noise", "zero")
+# `black` replaces the former `zero`. In normalised space the dataset mean is
+# exactly 0, so a scheme that filled with normalised zero WAS mean imputation:
+# the two ran the same line and agreed to five decimals on all 120 curves of the
+# E6 sweep, so the ablation reported four arms and varied three. `black` is black
+# in PIXEL space, which normalisation maps to about -1.99 per channel.
+VALID_IMPUTATIONS = ("mean", "blur", "uniform_noise", "black")
+
+# Refused rather than silently aliased. An alias would keep the degenerate arm
+# reachable, and a cached `zero` curve is a `mean` curve filed under another
+# name -- exactly the kind of artifact this project has spent its life removing.
+RETIRED_IMPUTATIONS = {
+    "zero": (
+        "'zero' filled with normalised zero, which IS the dataset mean, so it "
+        "duplicated 'mean' exactly. Use 'black' for black in pixel space, or "
+        "'mean' if the mean is what you wanted."
+    ),
+}
 
 
 def rank_features(attribution: np.ndarray) -> np.ndarray:
@@ -70,6 +86,10 @@ def relative_faithfulness(
             "comparable across severities, because masking an already-shifted "
             "input is itself off-distribution. Measure the random control in "
             "the same cell and pass it here."
+        )
+    if imputation in RETIRED_IMPUTATIONS:
+        raise ValueError(
+            f"imputation {imputation!r} was retired: {RETIRED_IMPUTATIONS[imputation]}"
         )
     if imputation not in VALID_IMPUTATIONS:
         raise ValueError(

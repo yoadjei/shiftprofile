@@ -27,7 +27,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from shiftprofile.metrics.faithfulness import VALID_IMPUTATIONS
+from shiftprofile.data.cifar import CIFAR10_MEAN, CIFAR10_STD
+from shiftprofile.metrics.faithfulness import (
+    RETIRED_IMPUTATIONS,
+    VALID_IMPUTATIONS,
+)
 
 # Bumped alongside explain-v2: a curve's key now names the evaluation index set,
 # the two upstream versions it reads, and which attributions it was built from.
@@ -59,6 +63,10 @@ def impute(
     Raises:
         ValueError: If scheme is unknown.
     """
+    if scheme in RETIRED_IMPUTATIONS:
+        raise ValueError(
+            f"imputation {scheme!r} was retired: {RETIRED_IMPUTATIONS[scheme]}"
+        )
     if scheme not in VALID_IMPUTATIONS:
         raise ValueError(
             f"unknown imputation {scheme!r}; expected one of {VALID_IMPUTATIONS}"
@@ -68,12 +76,23 @@ def impute(
     mask_expanded = mask.unsqueeze(1)  # (N, 1, H, W)
 
     if scheme == "mean":
-        # In normalized space, mean is zero. Replace with zeros.
+        # The dataset mean in pixel space is exactly 0 after normalisation, so
+        # filling with zeros IS mean imputation here. Correct, and the reason
+        # `zero` had to go: it ran this same line and silently duplicated it.
         result = torch.where(mask_expanded, torch.tensor(0.0, dtype=images.dtype, device=images.device), result)
 
-    elif scheme == "zero":
-        # Explicitly set to zero
-        result = torch.where(mask_expanded, torch.tensor(0.0, dtype=images.dtype, device=images.device), result)
+    elif scheme == "black":
+        # Black in PIXEL space, which normalisation maps to -mean/std, about
+        # -1.99, -1.98, -1.71 per channel -- not zero. The scheme this replaces
+        # was named `zero` and set normalised zero, which is the mean, so E6 ran
+        # three distinct arms while reporting four and the duplicate inflated the
+        # gate's denominator. Verified by the sweep: `mean` and `zero` agreed to
+        # five decimals on all 120 curves, which two schemes cannot do by chance.
+        black = torch.tensor(
+            [-m / s for m, s in zip(CIFAR10_MEAN, CIFAR10_STD)],
+            dtype=images.dtype, device=images.device,
+        ).view(1, -1, 1, 1)
+        result = torch.where(mask_expanded, black.expand_as(images), result)
 
     elif scheme == "blur":
         # Gaussian blur of the original image
