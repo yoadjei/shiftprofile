@@ -119,7 +119,7 @@ class TestItCanActuallyReadTheCache:
         cache = _seed_cache(tmp_path)
         rows = faithfulness_rows(
             _cells(), cache, explainers=EXPLAINERS, indices=INDICES,
-            imputation="mean", explain_options=explain_options_from(CONFIG),
+            imputations=["mean"], explain_options=explain_options_from(CONFIG),
             n_resamples=200,
         )
         assert len(rows) == len(_cells()) * len(EXPLAINERS)
@@ -140,7 +140,7 @@ class TestItCanActuallyReadTheCache:
         with pytest.raises(MissingArtifacts, match="no cached curves"):
             faithfulness_rows(
                 _cells(), cache, explainers=EXPLAINERS, indices=INDICES,
-                imputation="mean", explain_options=explain_options_from(CONFIG),
+                imputations=["mean"], explain_options=explain_options_from(CONFIG),
                 n_resamples=200,
             )
 
@@ -159,7 +159,7 @@ class TestItCanActuallyReadTheCache:
         with pytest.raises(MissingArtifacts, match="no cached curves"):
             faithfulness_rows(
                 _cells(), cache, explainers=EXPLAINERS, indices=INDICES,
-                imputation="mean", explain_options={"ig_steps": 999},
+                imputations=["mean"], explain_options={"ig_steps": 999},
                 n_resamples=200,
             )
 
@@ -168,10 +168,12 @@ class TestTheGateStatistic:
     def _rows(self, clean, severe, *, half_width=0.0):
         return [
             {"model_id": "resnet18", "seed": 0, "shift_family": CLEAN, "severity": 0,
-             "explainer": "ig", "faithfulness": clean, "half_width": half_width,
+             "explainer": "ig", "imputation": "mean",
+             "faithfulness": clean, "half_width": half_width,
              "low": clean - half_width, "high": clean + half_width, "n": 100},
             {"model_id": "resnet18", "seed": 0, "shift_family": "fog", "severity": 5,
-             "explainer": "ig", "faithfulness": severe, "half_width": half_width,
+             "explainer": "ig", "imputation": "mean",
+             "faithfulness": severe, "half_width": half_width,
              "low": severe - half_width, "high": severe + half_width, "n": 100},
         ]
 
@@ -200,6 +202,16 @@ class TestTheGateStatistic:
         rows[0]["half_width"] = 0.002
         rows[1]["half_width"] = 0.009
         assert gate_verdicts(rows)[0]["half_width"] == pytest.approx(0.009)
+
+    def test_a_change_no_larger_than_its_half_width_is_undefined(self):
+        """The bug this replaced tested `change == 0` exactly, which let the
+        random control through with a change of 1e-5 against a half-width of
+        1.2e-4 and printed a ratio of 67.9 as FAIL -- noise dressed as a
+        catastrophic failure, and counted in the summary."""
+        v = gate_verdicts(self._rows(0.0, 0.00001, half_width=0.00012))[0]
+        assert v["change"] != 0
+        assert v["ratio"] is None, "a change under its own uncertainty is not a change"
+        assert not v["passes"]
 
     def test_a_zero_change_is_undefined_not_failed(self):
         """"The effect is absent" and "our resolution is too coarse" are different
@@ -287,7 +299,8 @@ class TestThePrintedReport:
                 pt = 0.05 - sev * 0.008 if ex != "random" else 0.0
                 faith.append(dict(
                     model_id="resnet18", seed=0, shift_family=fam, severity=sev,
-                    explainer=ex, faithfulness=pt, half_width=0.003,
+                    explainer=ex, imputation="mean",
+                    faithfulness=pt, half_width=0.003,
                     low=pt - 0.003, high=pt + 0.003, n=1000,
                 ))
         return cal, faith
@@ -312,9 +325,10 @@ class TestThePrintedReport:
             {"n_eval_images": 1000, "explainers": ["integrated_gradients", "random"]},
             cal, faith,
         )
+        gate = capsys.readouterr().out.split("P3 GATE")[1]
         line = next(
-            l for l in capsys.readouterr().out.splitlines()
-            if l.startswith("random") and "fog" in l
+            l for l in gate.splitlines()
+            if "random" in l and "fog" in l
         )
         assert "no change" in line
         assert "FAIL" not in line
@@ -324,8 +338,12 @@ class TestThePrintedReport:
         1/sqrt(n), so that route costs 100x for a 10x narrowing and is a
         data-dependent protocol change."""
         cal, faith = self._rows()
+        # Resolved but coarse: the clean-to-severe change is 0.04, so a
+        # half-width of 0.02 clears the "is there a change" test and then fails
+        # the 10% bar at a ratio of 0.5. A half-width of 0.5 would swamp the
+        # change entirely and correctly report "no change" instead.
         for r in faith:
-            r["half_width"] = 0.5
+            r["half_width"] = 0.02
         pilot_report._print_report(
             {"n_eval_images": 1000, "explainers": ["integrated_gradients", "random"]},
             cal, faith,
