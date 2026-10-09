@@ -38,6 +38,20 @@ CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 
 
+def normalised_black() -> tuple[float, float, float]:
+    """Pixel-space black in normalised space: -mean/std, about (-1.99, -1.98, -1.71).
+
+    Not zero. Normalisation maps the dataset MEAN to zero, so a tensor of zeros is
+    the mean image and not a black one. That conflation has now been found twice
+    in this codebase under two different names -- the `zero` imputation scheme in
+    `metrics/faithfulness.py` and the `black` IG baseline in `explain.py` -- each
+    time producing an arm that silently duplicated the mean arm it was supposed to
+    contrast with. So the constant lives in exactly one place and every caller
+    reads it from here rather than rederiving it.
+    """
+    return tuple(-m / s for m, s in zip(CIFAR10_MEAN, CIFAR10_STD))
+
+
 def fixed_eval_indices(n: int, total: int = 10000, seed: int = 20260923) -> np.ndarray:
     """Generate deterministic evaluation indices for CIFAR-10 test set.
 

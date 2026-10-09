@@ -27,7 +27,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from shiftprofile.data.cifar import CIFAR10_MEAN, CIFAR10_STD
+from shiftprofile.data.cifar import normalised_black
 from shiftprofile.metrics.faithfulness import (
     RETIRED_IMPUTATIONS,
     VALID_IMPUTATIONS,
@@ -89,8 +89,7 @@ def impute(
         # gate's denominator. Verified by the sweep: `mean` and `zero` agreed to
         # five decimals on all 120 curves, which two schemes cannot do by chance.
         black = torch.tensor(
-            [-m / s for m, s in zip(CIFAR10_MEAN, CIFAR10_STD)],
-            dtype=images.dtype, device=images.device,
+            normalised_black(), dtype=images.dtype, device=images.device,
         ).view(1, -1, 1, 1)
         result = torch.where(mask_expanded, black.expand_as(images), result)
 
