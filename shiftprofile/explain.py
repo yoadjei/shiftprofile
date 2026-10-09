@@ -464,6 +464,15 @@ def parse_explainer(name: str) -> ExplainerName:
             f"{ROLLED_SUFFIX!r} suffix on {', '.join(ROLLABLE)}"
         )
 
+    if base == "random_lowres" and grid is None:
+        raise ValueError(
+            f"{name!r} needs its grid: spell it {LOWRES_PREFIX}<grid> with a grid "
+            f"in {LOWRES_GRIDS}. The bare base name is an internal dispatch label "
+            f"rather than a runnable arm, and accepting it built a cache key "
+            f"carrying grid=None, deferring the failure to the attribution call -- "
+            f"after the key for an artifact that cannot exist had been handed out."
+        )
+
     if rolled and base not in ROLLABLE:
         raise ValueError(
             f"{name!r} is not available: rolling {base!r} produces another draw "
