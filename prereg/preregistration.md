@@ -304,3 +304,49 @@ both call sites read it from there.
 
 **Outstanding.** The §2 revision this points to is held until the P3b geometry controls report. The
 single-seed caveat applies to everything above: all of it is `resnet18`, seed 0, 1000 images.
+
+---
+
+| Date | Section | Change | Reason | Data seen at time of amendment |
+|---|---|---|---|---|
+| 2026-10-09 | §9, entries A2 and A3 | **Retracted.** The faithfulness measurements they rest on were computed with an inverted removal mask | A7 | As A7 |
+
+**A7 — the instrument was inverted, and A2 and A3 are withdrawn.**
+`curves._get_removal_mask` selected the pixels of **lowest** attribution magnitude rather than the
+highest. It built `-|attr| + position` and took `topk(largest=True)`, and the largest value of
+`-|attr|` is the smallest `|attr|`. Measured on continuous data with no ties: 0 of 52 selected pixels
+were in the top 52 by magnitude and all 52 were in the bottom 52. Every removal curve written under
+`curves-v1` and `curves-v2` is the curve for deleting the background, so every faithfulness number
+this document has recorded answers a question nobody asked.
+
+Withdrawn with it:
+
+- **A2's two reversals.** The ranking reversal (Grad-CAM 0.91× IG under `blur`, 11.95× under `black`)
+  and the sign reversal on `fog` are both artefacts. Grad-CAM's *low* region is a large contiguous
+  backdrop, so deleting it preserved the prediction almost perfectly and it scored worst; Integrated
+  Gradients' low region is scattered, so it scored less badly. The ordering was a fact about where
+  each method's **minimum** sits.
+- **A3's "reliably negative at 2.2 to 25.6 half-widths".** Removing unimportant pixels barely moves
+  the probability, so `model_auc` stayed high and `random_auc − model_auc` was negative by
+  construction. The sign of the entire result was the defect.
+- Everything the P3b run reported, including the geometry ladder, the geometry-matched comparison and
+  the "anti-faithfulness" of Grad-CAM. §8 rows 4 and 5 are therefore **not** established as having
+  fired, and the pivot they justified is unjustified until the grid is recomputed.
+
+**A4 stands** as an arithmetic statement about how half-widths scale, but the ratios it quotes come
+from the same curves and are not to be reused. **A5 and A6 stand in full**: both misnamings are
+properties of the code, found by reading it, and neither depends on a curve.
+
+**What the controls could not catch, which is the methodological lesson.** All three of §6's validity
+controls are random-attribution controls. For an i.i.d. map the bottom *k* pixels are as random as the
+top *k* — the single case an inverted comparison leaves untouched. So the control read ≈0 exactly as a
+working control should, under all four imputation schemes, while every real explainer read negative.
+The instrument appeared sound and the explainers appeared to fail, and the agreement of the control
+with its own expectation was read as evidence that the machinery was trustworthy. **A control that
+cannot fail in the same way as the thing it controls is not a control for that failure.** §6 is
+amended to say so, and the function now has the five tests it never had.
+
+**Status of the study.** Unaffected: the calibration track, which is computed from predictions and
+touches no curve, and whose clean-to-severity-5 ladder stands. Void pending recomputation: every
+faithfulness, gate and rank result. The §2 revision remains unwritten, which in hindsight is the one
+procedural decision in this sequence that paid for itself.

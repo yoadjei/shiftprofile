@@ -14,7 +14,7 @@ go wrong with it.
 | AURC | Geifman & El-Yaniv | `metrics/calibration.py` | Sensitive to ties in confidence; stable sort used |
 | Temperature scaling | Guo et al. 2017 | `metrics/calibration.py` | MUST be fitted on held-out in-distribution data only. Warns when the fitted value is pinned at a search bound, which means the optimum lies outside the range and the fit failed |
 | Effective robustness | Taori et al. 2020 | `metrics/robustness.py` | Probit-space linear fit needs >= 2 reference models; fragile with few |
-| Removal-based faithfulness | Samek et al.; ROAD (Rong et al. 2022) | `metrics/faithfulness.py` | Masked inputs are off-manifold, and worse under shift. Never reported raw — always relative to a random-attribution control measured in the same cell. **That control is insufficient on its own: it is drawn per-pixel i.i.d., so it does not hold mask geometry fixed.** Measured to reverse both the explainer ranking and the sign of degradation with the imputation scheme — see below |
+| Removal-based faithfulness | Samek et al.; ROAD (Rong et al. 2022) | `metrics/faithfulness.py`, masking in `curves.py` | Masked inputs are off-manifold, and worse under shift. Never reported raw — always relative to a random-attribution control measured in the same cell. **Two pitfalls found here, both by reading code rather than results.** (1) That control is drawn per-pixel i.i.d., so it does not hold mask geometry fixed, and — worse — it is insensitive to the direction of the ranking, so it cannot detect an inverted mask. (2) The mask selected the LOWEST-magnitude pixels until `curves-v3`; see the retraction below. Pin the selection direction with a test against a map whose maximum and minimum are in known places |
 | Attribution stability | Alvarez-Melis & Jaakkola 2018 | `metrics/stability.py` | Confounded by changed predictions; conditioned on unchanged prediction, with the conditioning count reported beside every value |
 | Worst-group accuracy | Sagawa et al. 2020 | `metrics/subgroup.py` | Meaningless below ~200 rows per group; enforced by refusal, not by convention |
 | Equal-opportunity gap | Hardt et al. 2016 | `metrics/subgroup.py` | Conflicts with per-group calibration when base rates differ (Kleinberg et al.; Pleiss et al. 2017) |
@@ -59,7 +59,20 @@ go wrong with it.
   removed pixel to exactly that baseline. Baseline and imputation are not
   independent knobs.
 
-- **Removal-based faithfulness is imputation-dependent, measured.** On the pilot
+- **RETRACTED 2026-10-09 — the table below was computed with an inverted mask.**
+  `curves._get_removal_mask` selected the pixels of *lowest* attribution
+  magnitude rather than the highest (0 of 52 selected pixels in the top 52 by
+  magnitude; all 52 in the bottom 52), so every curve under `curves-v1` and
+  `curves-v2` is the removal curve for deleting the background. The numbers are
+  kept here, struck through in prose rather than deleted, because the pattern
+  they form is a useful record of what an inverted instrument looks like: the
+  ordering tracks where each method's **minimum** sits, not its maximum.
+  Grad-CAM's low region is one large contiguous backdrop, so deleting it
+  preserved the prediction almost perfectly and it scored worst of all.
+
+  Not to be cited. Superseded by whatever `curves-v3` produces.
+
+  **Removal-based faithfulness is imputation-dependent, measured.** On the pilot
   grid (`resnet18`, seed 0, 1000 images, 3 families × 3 severities + clean):
 
   | | `blur` | `mean` | `uniform_noise` | `black` |
