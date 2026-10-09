@@ -277,9 +277,15 @@ def fill(
     # Resolved once, from the config, for every stage that computes attributions
     # and every stage that reads them. One source, so a curve cannot be looked up
     # under settings its attributions were not computed with.
-    explain_options = {}
-    if "ig_steps" in config:
-        explain_options["ig_steps"] = config["ig_steps"]
+    #
+    # Built by the explain module, not here, and read by the report through the
+    # same function. `baseline` is in it because it was NOT, and `explainer_options`
+    # has carried it in the cache key all along on the strength of a comment saying
+    # E6 varies it. E6 could not vary it: no config key reached this dict, so every
+    # run attributed at the default and the ablation axis existed only in the key.
+    from .explain import explain_options_from_config
+
+    explain_options = explain_options_from_config(config)
 
     # Enumerate cells from config
     all_cells = enumerate_cells(config, config["track"])
