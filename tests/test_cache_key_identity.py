@@ -28,7 +28,14 @@ from shiftprofile.cache import ArtifactCache, spec_key
 from shiftprofile.cells import Cell, stage_spec
 from shiftprofile.curves import CURVES_VERSION, curves_is_cached, curves_spec
 from shiftprofile.data import eval_digest, fixed_eval_indices
-from shiftprofile.explain import EXPLAIN_VERSION, explain_spec, explainer_options
+from shiftprofile.explain import (
+    DEFAULT_IG_BASELINE,
+    EXPLAIN_VERSION,
+    IG_STEPS,
+    explain_options_from_config,
+    explain_spec,
+    explainer_options,
+)
 from shiftprofile.predict import PREDICT_VERSION, predict_spec
 
 
@@ -242,7 +249,14 @@ class TestExplainerOptionsAreInTheKey:
 
     def test_curves_normalise_the_options_so_equivalent_spellings_agree(self):
         """Explicitly passing the defaults must name the same artifact as omitting
-        them, or a caller who spells the protocol out gets a second cache."""
+        them, or a caller who spells the protocol out gets a second cache.
+
+        Spelled from the constants, not from literals. The default baseline used
+        to be written `"black"` here, which named the right tensor under the wrong
+        name: it set zeros, and normalisation maps the dataset mean to zero. The
+        same literal now names the real pixel-space baseline, so a test that kept
+        it would be asserting that two genuinely different artifacts share a key.
+        """
         implicit = curves_spec(
             CELL, explainer="integrated_gradients", imputation="mean",
             which="model", indices=THOUSAND,
@@ -250,9 +264,74 @@ class TestExplainerOptionsAreInTheKey:
         explicit = curves_spec(
             CELL, explainer="integrated_gradients", imputation="mean",
             which="model", indices=THOUSAND,
-            explain_options={"baseline": "black", "ig_steps": 32},
+            explain_options={"baseline": DEFAULT_IG_BASELINE, "ig_steps": IG_STEPS},
         )
         assert implicit == explicit
+
+
+class TestTheRollSeedFollowsTheIgnoredOptionRule:
+    """A new option must not fork the keys of artifacts that predate it.
+
+    `roll_seed` is the fifth option to pass through `explainer_options`, and every
+    IG and Grad-CAM attribution already on disk was computed before it existed.
+    If it reached their keys the whole cache would miss and the eight GPU-minutes
+    the baseline rename costs would become the whole stage again. The rule
+    `grad_cam: {}` established -- an option left at its default is omitted -- is
+    what makes that safe, so it is asserted for this option too.
+    """
+
+    @pytest.mark.parametrize("explainer", ["integrated_gradients", "grad_cam", "random"])
+    def test_an_unrolled_explainer_is_not_keyed_on_the_roll_seed(self, explainer):
+        a = explain_spec(CELL, explainer=explainer, indices=THOUSAND, roll_seed=0)
+        b = explain_spec(CELL, explainer=explainer, indices=THOUSAND, roll_seed=7)
+        assert a == b
+        assert "roll_seed" not in explainer_options(explainer)
+
+    @pytest.mark.parametrize("explainer",
+                             ["integrated_gradients_rolled", "grad_cam_rolled"])
+    def test_a_rolled_explainer_is_keyed_on_the_roll_seed(self, explainer):
+        """For a rolled arm the offsets ARE the artifact: the same attribution
+        under two seeds is two different controls, and the whole point of the arm
+        is the number you get by subtracting it. Two of them sharing a key would
+        serve one arm's control against the other's."""
+        a = explain_spec(CELL, explainer=explainer, indices=THOUSAND, roll_seed=0)
+        b = explain_spec(CELL, explainer=explainer, indices=THOUSAND, roll_seed=1)
+        assert a != b
+        assert explainer_options(explainer, roll_seed=3)["roll_seed"] == 3
+
+
+class TestTheConfigCanReachTheIgBaseline:
+    """Defect 4's other half: the key named the baseline and no config could set it.
+
+    `explainer_options` has carried `baseline` since the key was written, on the
+    strength of a comment saying E6 varies it. E6 could not vary it -- `fill`
+    forwarded `ig_steps` and nothing else, so every run attributed at the default
+    and the ablation axis existed in the key and nowhere else. A keyed but
+    unreachable axis is worse than an absent one, because it reads as covered.
+    """
+
+    def _curves(self, config):
+        return curves_spec(
+            CELL, explainer="integrated_gradients", imputation="mean",
+            which="model", indices=THOUSAND,
+            explain_options=explain_options_from_config(config),
+        )
+
+    def test_a_config_naming_the_baseline_changes_the_curve_key(self):
+        """End to end: a config key, through the mapping the filler and the
+        report share, into the key the curve is stored under."""
+        assert self._curves({"ig_baseline": "mean"}) != self._curves(
+            {"ig_baseline": "black"}
+        )
+
+    def test_a_config_silent_about_the_baseline_keys_as_it_always_did(self):
+        """The plumbing fix must not invalidate what is already on disk. Every
+        existing artifact was written by a config that named only `ig_steps`, so
+        that config has to produce the same key it produced before `ig_baseline`
+        was reachable."""
+        assert self._curves({"ig_steps": IG_STEPS}) == self._curves(
+            {"ig_steps": IG_STEPS, "ig_baseline": DEFAULT_IG_BASELINE}
+        )
 
 
 class TestControlSeedIsNamedForWhatItSeeds:
