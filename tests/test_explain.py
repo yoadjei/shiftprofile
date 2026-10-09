@@ -576,6 +576,21 @@ class TestExplainerNamesAreParsedInExactlyOnePlace:
         with pytest.raises(ValueError, match="grid"):
             parse_explainer(f"{LOWRES_PREFIX}1")
 
+    def test_the_bare_base_label_is_not_a_name(self):
+        """`random_lowres` is an internal dispatch label, not a runnable arm.
+
+        It is in BASE_EXPLAINERS so that the dispatch and options tables can be
+        keyed by it, and the parser accepted it on that membership alone --
+        returning grid=None, which `explain_spec` would then hash into a key
+        before `random_lowres_attribution` rejected the grid. A key handed out
+        for an artifact that cannot be computed is the same defect as a key that
+        omits what the artifact depends on: in both cases the key describes
+        something other than what is on disk. So the refusal has to happen in
+        the parse, which is upstream of the key.
+        """
+        with pytest.raises(ValueError, match="grid"):
+            parse_explainer("random_lowres")
+
     def test_a_grid_that_is_not_on_the_ladder_is_not_a_name(self):
         """Refused rather than accepted-and-run: a config asking for a rung the
         ladder does not have would otherwise spend GPU on a point the report has
@@ -764,25 +779,41 @@ class TestBatchingDoesNotChangeResults:
     def test_the_chunk_size_does_not_change_the_result(self, explainer):
         """Seeded above the model, for the reason given in the test above.
 
-        This one failed 3 of 12 model draws, and the measurement says why: 7
-        images at batch_size=2 leaves a trailing chunk of ONE, so `in_twos`
-        silently includes the degenerate batch the test below pins. Image 6 --
-        the trailing one -- carried the worst difference in every failing draw,
-        at 3.1e-4 to 9.4e-4 relative, against 6.9e-7 for the draws that passed.
+        EIGHT images, not seven, and that is the point of the number. At seven,
+        batch_size=2 chunks as 2,2,2,1 -- so `in_twos` ends in the degenerate
+        batch the test below pins, and this test was partly measuring the very
+        anomaly it was meant to be clear of. It failed 3 of 12 model draws
+        because of it, image 6 (the trailing one) carrying the worst difference
+        in every failing draw at 3.1e-4 to 9.4e-4 relative.
+
+        At eight the chunkings are 2,2,2,2 and 4,4 with no size-1 chunk
+        anywhere, and the agreement is then not approximate but EXACT: measured
+        0.0 difference for both, against 2.4e-3 for batch size 1. So the claim
+        is tested as the sharp thing it is, and the two claims -- chunking is
+        free, batch size 1 is not -- stop sharing a measurement.
         """
         torch.manual_seed(0)
         model = resnet18_cifar().eval()
-        images = torch.randn(7, 3, 32, 32)
-        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2])
+        images = torch.randn(8, 3, 32, 32)
+        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2, 6])
 
-        in_twos = explain_batch(
-            model, images, targets, explainer=explainer, batch_size=2
-        )
         in_one_go = explain_batch(
-            model, images, targets, explainer=explainer, batch_size=7
+            model, images, targets, explainer=explainer, batch_size=8
         )
-
-        np.testing.assert_allclose(in_twos, in_one_go, rtol=1e-4, atol=1e-5)
+        for batch_size in (2, 4):
+            chunked = explain_batch(
+                model, images, targets, explainer=explainer, batch_size=batch_size
+            )
+            np.testing.assert_array_equal(
+                chunked, in_one_go,
+                err_msg=(
+                    f"batch_size={batch_size} changed the result. Measured "
+                    f"bitwise identical on CPU. A tiny nonzero difference on "
+                    f"accelerated hardware is a kernel-selection difference "
+                    f"rather than a regression -- record the number here and "
+                    f"loosen to it, do not delete the test."
+                ),
+            )
 
     def test_batch_size_one_is_the_odd_one_out_and_that_is_why_v2_exists(self):
         """Documents the measurement behind the EXPLAIN_VERSION bump.
@@ -800,19 +831,23 @@ class TestBatchingDoesNotChangeResults:
         The model is now seeded, which is a fix and not a tidy-up: it was built
         from whatever RNG state the preceding test left, and both bounds here are
         weight-dependent, so this test failed 4 of 12 model draws. Three of those
-        were the lower bound -- 7 images at batch_size=2 ends in a chunk of ONE,
-        putting `ig(2)` on the very kernel path this test asserts it avoids, at
-        up to 9.4e-4 relative. One was the upper bound: at that draw the batch-1
-        difference was only 9.3e-7, so torch had not in fact diverged.
+        were the lower bound -- at seven images, batch_size=2 ends in a chunk of
+        ONE, putting `ig(2)` on the very kernel path this test asserts it avoids,
+        at up to 9.4e-4 relative. One was the upper bound: at that draw the
+        batch-1 difference was only 9.3e-7, so torch had not in fact diverged.
 
-        Measured at this seed: chunk size 2 agrees to 9.0e-7 relative and batch
-        size 1 differs by 2.4e-3. Both figures are recorded here because the
-        version bump was justified by the second one.
+        Eight images, so batch_size=2 chunks as 2,2,2,2 and the lower bound
+        measures what it claims to. The figures then separate cleanly: chunk
+        size 2 agrees EXACTLY (0.0 difference, not the 9.0e-7 seen at seven
+        images -- that 9.0e-7 was the trailing size-1 chunk and nothing else),
+        while batch size 1 differs by 2.4e-3. Both are recorded because the
+        version bump was justified by the second one, and the first is what
+        makes the second attributable to batch size 1 alone.
         """
         torch.manual_seed(0)
         model = resnet18_cifar().eval()
-        images = torch.randn(7, 3, 32, 32)
-        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2])
+        images = torch.randn(8, 3, 32, 32)
+        targets = torch.tensor([3, 1, 4, 1, 5, 9, 2, 6])
 
         def ig(batch_size):
             return explain_batch(
@@ -820,9 +855,9 @@ class TestBatchingDoesNotChangeResults:
                 explainer="integrated_gradients", batch_size=batch_size,
             )
 
-        scale = np.abs(ig(7)).max()
-        assert np.abs(ig(2) - ig(7)).max() / scale < 1e-5, "chunk sizes 2+ agree"
-        assert np.abs(ig(1) - ig(7)).max() / scale > 1e-4, (
+        scale = np.abs(ig(8)).max()
+        assert np.abs(ig(2) - ig(8)).max() == 0.0, "chunk sizes 2+ agree exactly"
+        assert np.abs(ig(1) - ig(8)).max() / scale > 1e-4, (
             "batch size 1 no longer differs; if torch stopped special-casing it, "
             "say so here rather than deleting the test -- the version bump was "
             "justified by this difference"
