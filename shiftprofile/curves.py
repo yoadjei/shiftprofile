@@ -33,11 +33,20 @@ from shiftprofile.metrics.faithfulness import (
     VALID_IMPUTATIONS,
 )
 
-# Bumped alongside explain-v2: a curve's key now names the evaluation index set,
-# the two upstream versions it reads, and which attributions it was built from.
-# Curves written under curves-v1 recorded none of that, so they cannot be told
-# apart from curves over a different eval set or a different IG baseline.
-CURVES_VERSION = "curves-v2"
+# v1 -> v2 alongside explain-v2: a curve's key now names the evaluation index
+# set, the two upstream versions it reads, and which attributions it was built
+# from. Curves written under curves-v1 recorded none of that, so they cannot be
+# told apart from curves over a different eval set or a different IG baseline.
+#
+# v2 -> v3 because `_get_removal_mask` removed the LEAST important pixels rather
+# than the most, so every curve under v1 and v2 is the removal curve for
+# deleting the background. Not a precision change and not an alias: the artifact
+# answers a different question from the one its key describes, and no analysis
+# can be rescued from it. The bump is what stops a resumed run from mixing the
+# two, and what lets an archived result record say which it was -- the spec is
+# identical either way, so the version is the only thing that distinguishes
+# them.
+CURVES_VERSION = "curves-v3"
 REMOVAL_FRACTIONS = (0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0)
 
 
@@ -255,10 +264,7 @@ def _get_removal_mask(
         Boolean tensor of shape (N, H, W); True means "remove this pixel".
     """
     N, H, W = attributions.shape
-    abs_attr = torch.abs(attributions)
-
-    # Flatten spatial dimensions
-    flat_attr = abs_attr.view(N, H * W)  # (N, H*W)
+    flat_attr = torch.abs(attributions).view(N, H * W)
 
     # Number of pixels to remove per sample
     n_remove = int(np.ceil(fraction * H * W))
@@ -269,31 +275,37 @@ def _get_removal_mask(
     if n_remove >= H * W:
         return torch.ones(N, H, W, dtype=torch.bool, device=attributions.device)
 
-    # For each sample, find the threshold for the top n_remove pixels
-    # Using topk with ties broken by position
-    indices_flat = torch.arange(H * W, device=attributions.device).unsqueeze(0)
-    indices_flat = indices_flat.expand(N, -1)
+    # Descending by magnitude, so the pixels removed are the ones the
+    # attribution called MOST important.
+    #
+    # This selected the LEAST important pixels until curves-v3. The previous
+    # implementation built `compound_key = -|attr| + position` and took
+    # `topk(largest=True)` of it -- and the largest value of -|attr| is the
+    # SMALLEST |attr|. Measured on continuous data with no ties: 0 of 52
+    # selected pixels were in the top 52 by magnitude and all 52 were in the
+    # bottom 52. Every faithfulness number computed before that fix was the
+    # curve for deleting the background.
+    #
+    # It survived for so long because the study's three validity controls are
+    # all random-attribution controls, and for an i.i.d. map the bottom k is as
+    # random as the top k -- the single case an inverted comparison cannot
+    # disturb. The control read ~0 exactly as it should while every real
+    # explainer read negative, which looked like a finding about explainers.
+    #
+    # `stable=True` is what breaks ties by position in row-major order, as the
+    # docstring promises. The old compound key did that by adding a positional
+    # term of at most 1/(H*W) = 9.8e-4, which is fine against Grad-CAM values of
+    # order 1 but is 10% of a typical Integrated Gradients magnitude, so it
+    # could reorder pixels that were not tied at all. A stable sort has no
+    # scale to get wrong.
+    order = torch.argsort(flat_attr, dim=1, descending=True, stable=True)
+    top_indices = order[:, :n_remove]
 
-    # Create a compound key: (neg_attribution, position) for stable sorting
-    # topk will sort by the first component, breaking ties by the second
-    neg_attr_for_sort = -flat_attr
-    # Offset position so that it's much smaller than attribution magnitudes
-    # This ensures attribution is the primary key, position is the tiebreaker
-    position_key = indices_flat.float() / (H * W)  # [0, 1)
-
-    compound_key = neg_attr_for_sort + position_key / (H * W)
-
-    # Get the top n_remove indices
-    _, top_indices = torch.topk(compound_key, k=n_remove, dim=1, largest=True)
-
-    # Create mask
+    # scatter_, not a Python loop over N: the loop issued one GPU op per image
+    # per fraction, about 8000 per work unit where this issues one.
     mask = torch.zeros(N, H * W, dtype=torch.bool, device=attributions.device)
-    for i in range(N):
-        mask[i, top_indices[i]] = True
-
-    # Reshape back to (N, H, W)
-    mask = mask.view(N, H, W)
-    return mask
+    mask.scatter_(1, top_indices, True)
+    return mask.view(N, H, W)
 
 
 def paired_removal_curves(

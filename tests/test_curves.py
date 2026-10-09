@@ -14,11 +14,101 @@ import torch.nn as nn
 from shiftprofile.curves import (
     CURVES_VERSION,
     REMOVAL_FRACTIONS,
+    _get_removal_mask,
     impute,
     removal_curve,
     paired_removal_curves,
 )
-from shiftprofile.metrics.faithfulness import VALID_IMPUTATIONS
+from shiftprofile.metrics.faithfulness import VALID_IMPUTATIONS, rank_features
+
+
+class TestTheRemovalMaskSelectsTheMostImportantPixels:
+    """The direction of the comparison that decides which pixels get deleted.
+
+    Nothing tested this function at all, which is how it came to remove the
+    LEAST important pixels for the whole life of the project. It built
+    `-|attr| + position` and took `topk(largest=True)`, and the largest value of
+    `-|attr|` is the smallest `|attr|`. Every faithfulness number produced under
+    curves-v1 and curves-v2 is therefore the removal curve for deleting the
+    background, and the negative faithfulness that drove a pre-registered pivot
+    was that and nothing else.
+
+    Note what the study's own validity controls could not catch. All three are
+    random-attribution controls, and for an i.i.d. map the bottom k pixels are
+    as random as the top k -- the single case an inverted comparison leaves
+    untouched. The control read ~0 exactly as a working control should while
+    every real explainer read negative, so the instrument appeared sound and the
+    explainers appeared to fail. A control that cannot fail in the same way as
+    the thing it controls is not a control for this.
+    """
+
+    def test_it_removes_the_highest_magnitude_pixels(self):
+        """The property the module's docstring claims and the metric needs:
+        lower AUC means the attribution found what the model relied on, which
+        is only true if the pixels deleted are the ones it ranked highest."""
+        attribution = torch.zeros(1, 8, 8)
+        attribution[0, 0:2, 0:2] = 10.0   # the four largest
+        attribution[0, 6:8, 6:8] = 0.01   # the four smallest non-zero
+
+        mask = _get_removal_mask(attribution, 4 / 64)
+
+        assert mask[0, 0:2, 0:2].all(), (
+            "the four largest-magnitude pixels were not the ones removed"
+        )
+        assert float(attribution[0][mask[0]].min()) == 10.0
+
+    @pytest.mark.parametrize("fraction", [0.05, 0.1, 0.3, 0.5])
+    def test_it_agrees_with_rank_features_on_continuous_data(self, fraction):
+        """Pinned against `rank_features`, the project's other ranking of the
+        same quantity, which sorts `-|attr|` ascending and was always correct.
+        The two disagreed completely, and because neither was tested against
+        the other nothing said so."""
+        rng = np.random.RandomState(0)
+        attribution = rng.randn(4, 32, 32).astype(np.float32)
+        n_remove = int(np.ceil(fraction * 1024))
+
+        mask = _get_removal_mask(torch.from_numpy(attribution), fraction)
+
+        for i in range(len(attribution)):
+            expected = set(rank_features(attribution[i])[:n_remove].tolist())
+            selected = set(torch.nonzero(mask[i].reshape(-1)).reshape(-1).tolist())
+            assert selected == expected, (
+                f"image {i}: {len(selected & expected)}/{n_remove} of the "
+                f"selected pixels are the ones rank_features would remove"
+            )
+
+    def test_ties_are_broken_by_position_in_row_major_order(self):
+        """Promised by the docstring, and the reason the sort is stable.
+
+        The superseded implementation did it by adding a positional term of at
+        most 1/(H*W) = 9.8e-4 to the magnitude. That is harmless against
+        Grad-CAM values of order 1 and about 10% of a typical Integrated
+        Gradients magnitude, so it could reorder pixels that were not tied.
+        """
+        attribution = torch.zeros(1, 8, 8)  # every pixel tied at zero
+
+        mask = _get_removal_mask(attribution, 4 / 64).reshape(-1)
+
+        assert torch.nonzero(mask).reshape(-1).tolist() == [0, 1, 2, 3]
+
+    def test_the_count_removed_is_the_ceiling_of_the_fraction(self):
+        attribution = torch.randn(3, 32, 32)
+        for fraction in (0.05, 0.2, 0.7):
+            mask = _get_removal_mask(attribution, fraction)
+            expected = int(np.ceil(fraction * 1024))
+            assert mask.reshape(3, -1).sum(dim=1).tolist() == [expected] * 3
+
+    def test_magnitude_not_signed_value_decides(self):
+        """Consistent with `rank_features`. For Integrated Gradients a strongly
+        negative attribution is strong evidence AGAINST the class, which is
+        still evidence the model used."""
+        attribution = torch.zeros(1, 8, 8)
+        attribution[0, 0, 0:2] = -9.0
+        attribution[0, 7, 0:2] = +1.0
+
+        mask = _get_removal_mask(attribution, 2 / 64)
+
+        assert mask[0, 0, 0:2].all(), "the largest |attribution| was not removed"
 
 
 # ============================================================================
