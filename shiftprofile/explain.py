@@ -1,4 +1,4 @@
-"""Attribution methods: Integrated Gradients, Grad-CAM, random baseline.
+"""Attribution methods: Integrated Gradients, Grad-CAM, and three controls.
 
 All methods return attributions in normalized space with channels summed to
 (n, 32, 32) shape. Attribution is per-pixel because removal operates on pixels,
@@ -6,14 +6,30 @@ not channels.
 
 The design priorities here are:
   1. Correctness: IG satisfies its mathematical property (completeness)
-  2. Reproducibility: Random baseline is exactly reproducible by seed
+  2. Reproducibility: every control is exactly reproducible by seed
   3. Session robustness: Grad-CAM leaks no hooks, so Kaggle's 12-hour sessions
      do not slowly poison the model
   4. Cost efficiency: IG_STEPS = 32 is ~35% cheaper than the standard 50
+
+Three controls, not one, because removal-based faithfulness turned out to be
+sensitive to things the single pixel-i.i.d. control cannot hold fixed:
+
+  `random`            per-pixel i.i.d. noise. The control `paired_removal_curves`
+                      subtracts, and the one the pilot's negative faithfulness
+                      was measured against.
+  `random_lowres_<k>` noise on a k x k lattice, upsampled exactly as Grad-CAM is.
+                      Sees no model, so whatever it scores is blob size alone.
+  `<name>_rolled`     the explainer's own map, translated. Same geometry and same
+                      values, no alignment to the image it came from.
+
+The pilot's finding is that an attribution's score tracks the geometry of the
+mask it induces, and these two make that measurable instead of arguable: the
+first holds the model out, the second holds the geometry in.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -22,14 +38,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy import ndimage
 
+from shiftprofile.data.cifar import normalised_black
 
-# Bumped from explain-v1 when attribution moved from one image at a time to
-# real batches. The two paths agree mathematically, but cuDNN picks different
-# kernels at different batch sizes, so the float32 results are not guaranteed
-# bitwise equal. Rather than let a resumed run mix attributions from both
-# paths, the bump recomputes them -- which costs minutes now that it batches.
-EXPLAIN_VERSION = "explain-v2"
+
+# explain-v1 -> v2 when attribution moved from one image at a time to real
+# batches. The two paths agree mathematically, but cuDNN picks different kernels
+# at different batch sizes, so the float32 results are not guaranteed bitwise
+# equal. Rather than let a resumed run mix attributions from both paths, the bump
+# recomputed them -- which costs minutes now that it batches.
+#
+# v2 -> v3 because `baseline="black"` meant something else under v2. It set
+# `torch.zeros_like(x)`, which in normalised space is the dataset MEAN, so the
+# string "black" named a mean baseline. The name now means what it says, and the
+# same spelling therefore identifies two different artifacts across the bump.
+# The version is what tells them apart: a result record stores (spec, version),
+# so `baseline="black"` under explain-v2 is unambiguously the old mean baseline
+# and nothing has to be reinterpreted by hand. Aliasing instead of bumping is
+# what made the retired `zero` imputation scheme undetectable for so long.
+EXPLAIN_VERSION = "explain-v3"
 IG_STEPS = 32
+
+# "mean" is the former "black": zeros in normalised space, which IS the dataset
+# mean. "black" is now black in pixel space. "blur" is unchanged. E6 varies this
+# axis, so the names have to be true or the ablation contrasts an arm with
+# itself -- which is exactly what happened on the imputation axis.
+IG_BASELINES = ("mean", "black", "blur")
+
+# The frozen protocol's baseline. Zeros, i.e. the dataset mean: the behaviour
+# that has always run, now under a name that describes it.
+DEFAULT_IG_BASELINE = "mean"
 
 # Attribution runs one model pass per image per IG step, so the batch size is
 # the difference between minutes and hours. Matches curves.py.
@@ -56,13 +93,52 @@ def _per_image_targets(target, n: int, device: str) -> torch.Tensor:
     return targets
 
 
+def _ig_baseline(x: torch.Tensor, baseline: str, device: str) -> torch.Tensor:
+    """The tensor IG integrates from. One place, so both callers agree.
+
+    `integrated_gradients` and `ig_completeness_error` each built this
+    independently and so each carried the same misnaming of `black`. The
+    completeness check comparing an attribution against a DIFFERENT baseline
+    from the one it was computed with would report a spurious error, so the two
+    cannot be allowed to drift.
+    """
+    if baseline not in IG_BASELINES:
+        raise ValueError(
+            f"baseline must be one of {IG_BASELINES}, got {baseline!r}. Note "
+            f"that 'black' means black in PIXEL space (about -1.99 per channel "
+            f"once normalised); the all-zeros baseline is 'mean', because "
+            f"normalisation maps the dataset mean to zero."
+        )
+
+    if baseline == "mean":
+        # Zeros in normalised space. This is the dataset mean image, which is
+        # what this baseline has always been; only the name has changed.
+        return torch.zeros_like(x)
+
+    if baseline == "black":
+        return (
+            torch.tensor(normalised_black(), dtype=x.dtype, device=device)
+            .view(1, -1, 1, 1)
+            .expand_as(x)
+            .contiguous()
+        )
+
+    # Gaussian blur in normalized space
+    x_np = x.cpu().numpy()
+    x_baseline_np = np.zeros_like(x_np)
+    for i in range(x.shape[0]):
+        for c in range(3):
+            x_baseline_np[i, c] = ndimage.gaussian_filter(x_np[i, c], sigma=1.5)
+    return torch.from_numpy(x_baseline_np).to(device)
+
+
 def integrated_gradients(
     model: nn.Module,
     x: torch.Tensor,
     target,
     *,
     steps: int = IG_STEPS,
-    baseline: str = "black",
+    baseline: str = DEFAULT_IG_BASELINE,
     device: str = "cpu",
 ) -> np.ndarray:
     """Integrated Gradients attribution method.
@@ -72,38 +148,32 @@ def integrated_gradients(
         x: Input images of shape (n, 3, 32, 32) in normalized space.
         target: Class index per image, or one scalar shared by the whole batch.
         steps: Number of IG integration steps (default: 32).
-        baseline: "black" (zeros) or "blur" (Gaussian-blurred input).
+        baseline: "mean" (zeros, i.e. the dataset mean), "black" (black in pixel
+            space) or "blur" (Gaussian-blurred input).
         device: Device to run on ("cpu" or "cuda").
 
     Returns:
         Attribution array of shape (n, 32, 32) with channels summed, dtype float32.
 
     Raises:
-        ValueError: If baseline is not "black" or "blur".
+        ValueError: If baseline is not one of IG_BASELINES.
 
     Note:
         Images in a batch are attributed independently, which holds because
         `model.eval()` puts BatchNorm on its running statistics. In train mode
         the batch statistics would couple the images and each attribution would
         depend on what it happened to be batched with.
-    """
-    if baseline not in ("black", "blur"):
-        raise ValueError(f"baseline must be 'black' or 'blur', got {baseline!r}")
 
+        The baseline is not cosmetic: attribution is `grad * (x - baseline)`, so
+        a pixel sitting at the baseline value scores zero however much the model
+        depends on it. Under the "mean" baseline that is every pixel near the
+        dataset mean, and "mean" removal imputation then moves a removed pixel to
+        exactly that baseline -- so the choice interacts with the metric that
+        consumes the attribution, which is why it is an E6 ablation axis.
+    """
     x = x.to(device).detach()
     n = x.shape[0]
-
-    # Compute baseline
-    if baseline == "black":
-        x_baseline = torch.zeros_like(x)
-    elif baseline == "blur":
-        # Gaussian blur in normalized space
-        x_np = x.cpu().numpy()
-        x_baseline_np = np.zeros_like(x_np)
-        for i in range(n):
-            for c in range(3):
-                x_baseline_np[i, c] = ndimage.gaussian_filter(x_np[i, c], sigma=1.5)
-        x_baseline = torch.from_numpy(x_baseline_np).to(device)
+    x_baseline = _ig_baseline(x, baseline, device)
 
     model.eval()
     targets = _per_image_targets(target, n, device)
@@ -242,6 +312,168 @@ def random_attribution(shape: tuple, *, seed: int) -> np.ndarray:
     return rng.randn(*shape).astype(np.float32)
 
 
+# The grids `random_lowres` may be drawn on. 4 is ResNet-18's final feature map
+# on a 32x32 input, which is the resolution Grad-CAM actually has; the rest
+# bracket it so the effect of blob size can be read as a curve rather than
+# argued from one point.
+#
+# 1 is excluded deliberately. A single value makes every pixel tie, so the mask
+# becomes the first n pixels in row-major order and the arm would measure image
+# position (sky at the top of a CIFAR frame) rather than mask geometry.
+LOWRES_GRIDS = (2, 4, 8, 16, 32)
+
+
+def random_lowres_attribution(shape: tuple, *, grid: int, seed: int) -> np.ndarray:
+    """A random attribution with a chosen spatial blob size, and no model input.
+
+    This is the control the study was missing. `paired_removal_curves` always
+    draws its control per-pixel i.i.d., so a method whose map is coarse is scored
+    against a mask that is scattered, and the two differ in geometry before they
+    differ in content: replacing one contiguous patch leaves a CIFAR image far
+    more recognisable than replacing the same NUMBER of scattered pixels does.
+    Any faithfulness this function registers is therefore attributable to blob
+    size alone, because it never sees the model, the image or the label.
+
+    Draws on a `grid` x `grid` lattice, applies ReLU, then bilinearly upsamples
+    to 32x32 -- `grad_cam`'s exact pipeline, including the ReLU, so that the
+    post-ReLU zeros and the interpolation ramps between them are the same shape
+    of object. Matching all of it matters: ranking is by |attribution|, and a
+    map that is non-negative with flat zero regions ranks differently from a
+    signed one even at identical smoothness.
+
+    Args:
+        shape: Shape of the output (n, 32, 32).
+        grid: Lattice size, one of LOWRES_GRIDS.
+        seed: Random seed (required, no default).
+
+    Returns:
+        Random low-resolution attribution array, dtype float32.
+
+    Raises:
+        ValueError: If grid is not in LOWRES_GRIDS.
+    """
+    if grid not in LOWRES_GRIDS:
+        raise ValueError(
+            f"grid must be one of {LOWRES_GRIDS}, got {grid}. grid=1 is excluded "
+            f"because a single value ties every pixel, leaving the mask to the "
+            f"positional tie-break."
+        )
+
+    n, h, w = shape
+    rng = np.random.RandomState(seed)
+    coarse = torch.from_numpy(rng.randn(n, 1, grid, grid).astype(np.float32))
+    coarse = F.relu(coarse)
+    up = F.interpolate(coarse, size=(h, w), mode="bilinear", align_corners=False)
+    return up.squeeze(1).numpy().astype(np.float32)
+
+
+def roll_attribution(attribution: np.ndarray, *, seed: int) -> np.ndarray:
+    """Translate each attribution map by a seeded random offset, wrapping around.
+
+    The per-explainer counterpart to `random_lowres_attribution`. A rolled map
+    keeps the original's exact value multiset and exact spatial autocorrelation,
+    so the mask it induces has the same geometry down to the pixel -- but it no
+    longer sits over the part of the image it was computed from. The difference
+    between an explainer's faithfulness and its rolled version is therefore what
+    the explainer's LOCALISATION is worth once geometry is held fixed, which is
+    the quantity a pixel-i.i.d. control cannot isolate.
+
+    Offsets are drawn per image from the h*w - 1 non-identity translations, so
+    the control is never silently the attribution itself.
+
+    Args:
+        attribution: Array of shape (n, h, w).
+        seed: Random seed (required, no default).
+
+    Returns:
+        Rolled attribution array, same shape and dtype as the input.
+    """
+    n, h, w = attribution.shape
+    rng = np.random.RandomState(seed)
+    offsets = rng.randint(1, h * w, size=n)
+    rolled = np.empty_like(attribution)
+    for i, offset in enumerate(offsets):
+        dy, dx = divmod(int(offset), w)
+        rolled[i] = np.roll(attribution[i], shift=(dy, dx), axis=(0, 1))
+    return rolled
+
+
+LOWRES_PREFIX = "random_lowres_"
+ROLLED_SUFFIX = "_rolled"
+
+BASE_EXPLAINERS = ("integrated_gradients", "grad_cam", "random", "random_lowres")
+
+# Rolling a map that carries no localisation changes nothing about it in
+# distribution, so a rolled random arm would burn a run slot to re-measure the
+# arm it was rolled from. Refused rather than allowed-and-pointless.
+ROLLABLE = ("integrated_gradients", "grad_cam")
+
+
+@dataclass(frozen=True)
+class ExplainerName:
+    """An explainer name decomposed into the axes encoded in it.
+
+    The grid and the roll live in the NAME rather than in separate config keys so
+    that `explainers:` stays the single list a config varies and `fill` needs no
+    new axis to fan out over. The parse is shared by `explainer_options`, which
+    builds the cache key, and `explain_batch`, which does the work -- the two
+    reading one parse is the invariant that keeps an artifact from being keyed on
+    settings it was not computed with.
+    """
+
+    base: str
+    rolled: bool
+    grid: Optional[int] = None
+
+
+def parse_explainer(name: str) -> ExplainerName:
+    """Decompose an explainer name. The only place the naming scheme is read.
+
+    Accepts the four base names, `random_lowres_<grid>` for a grid in
+    LOWRES_GRIDS, and a `_rolled` suffix on the explainers for which rolling
+    means something.
+
+    Raises:
+        ValueError: If the name is not a recognised explainer.
+    """
+    rolled = name.endswith(ROLLED_SUFFIX)
+    stem = name[: -len(ROLLED_SUFFIX)] if rolled else name
+
+    grid = None
+    if stem.startswith(LOWRES_PREFIX):
+        suffix = stem[len(LOWRES_PREFIX):]
+        if not suffix.isdigit():
+            raise ValueError(
+                f"unknown explainer {name!r}: expected {LOWRES_PREFIX}<grid> with "
+                f"a grid in {LOWRES_GRIDS}, got suffix {suffix!r}"
+            )
+        grid = int(suffix)
+        if grid not in LOWRES_GRIDS:
+            raise ValueError(
+                f"unknown explainer {name!r}: grid must be one of {LOWRES_GRIDS}"
+            )
+        base = "random_lowres"
+    else:
+        base = stem
+
+    if base not in BASE_EXPLAINERS:
+        raise ValueError(
+            f"unknown explainer {name!r}. Available: "
+            f"{', '.join(sorted(BASE_EXPLAINERS))}, "
+            f"{LOWRES_PREFIX}<{'|'.join(str(g) for g in LOWRES_GRIDS)}>, and a "
+            f"{ROLLED_SUFFIX!r} suffix on {', '.join(ROLLABLE)}"
+        )
+
+    if rolled and base not in ROLLABLE:
+        raise ValueError(
+            f"{name!r} is not available: rolling {base!r} produces another draw "
+            f"from the same distribution, so the arm would re-measure the one it "
+            f"was rolled from. Rollable: {', '.join(ROLLABLE)}."
+        )
+
+    return ExplainerName(base=base, rolled=rolled, grid=grid)
+
+
 def explain_batch(
     model: nn.Module,
     images: torch.Tensor,
@@ -258,7 +490,8 @@ def explain_batch(
         model: A PyTorch model in eval mode.
         images: Batch of images (n, 3, 32, 32).
         targets: Target class indices (n,).
-        explainer: Name of explainer ("integrated_gradients", "grad_cam", "random").
+        explainer: Any name `parse_explainer` accepts: a base explainer,
+            `random_lowres_<grid>`, or either of those with a `_rolled` suffix.
         device: Device to run on.
         batch_size: Images per model pass (default: 256).
         **kw: Additional kwargs passed to the explainer.
@@ -277,17 +510,7 @@ def explain_batch(
         One pilot cell took about 55 minutes, which put the full grid at
         roughly 220 GPU-hours for this stage alone.
     """
-    explainers = {
-        "integrated_gradients": integrated_gradients,
-        "grad_cam": grad_cam,
-        "random": random_attribution,
-    }
-
-    if explainer not in explainers:
-        names = ", ".join(sorted(explainers.keys()))
-        raise ValueError(
-            f"unknown explainer {explainer!r}. Available: {names}"
-        )
+    parsed = parse_explainer(explainer)
 
     # Each explainer takes a DIFFERENT set of options, so kwargs are validated
     # per explainer rather than splatted into whichever function is dispatched.
@@ -299,7 +522,10 @@ def explain_batch(
         "integrated_gradients": {"steps", "baseline"},
         "grad_cam": {"target_layer"},
         "random": {"seed"},
-    }[explainer]
+        "random_lowres": {"grid", "seed"},
+    }[parsed.base]
+    if parsed.rolled:
+        allowed = allowed | {"roll_seed"}
     unknown = set(kw) - allowed
     if unknown:
         raise TypeError(
@@ -309,22 +535,37 @@ def explain_batch(
         )
 
     n = images.shape[0]
+    options = dict(kw)
+    roll_seed = options.pop("roll_seed", None)
+    if parsed.rolled and roll_seed is None:
+        raise ValueError(
+            f"{explainer!r} requires an explicit 'roll_seed': the offsets are the "
+            f"control the explainer is compared against, so they must be exactly "
+            f"reproducible."
+        )
 
-    if explainer == "random":
-        if "seed" not in kw:
+    if parsed.base in ("random", "random_lowres"):
+        if "seed" not in options:
             raise ValueError(
-                "the random explainer requires an explicit 'seed': it is the "
-                "control every faithfulness number is reported against, so it "
-                "must be exactly reproducible."
+                f"the {parsed.base} explainer requires an explicit 'seed': it is "
+                f"a control every faithfulness number is reported against, so it "
+                f"must be exactly reproducible."
             )
-        return random_attribution((n, 32, 32), seed=kw["seed"])
+        if parsed.base == "random":
+            return random_attribution((n, 32, 32), seed=options["seed"])
+        return random_lowres_attribution(
+            (n, 32, 32), grid=options["grid"], seed=options["seed"]
+        )
 
     if batch_size < 1:
         raise ValueError(f"batch_size must be at least 1, got {batch_size}")
 
     # Both remaining explainers take a target per image, so a chunk is one
     # model pass rather than one per image.
-    fn = explainers[explainer]
+    fn = {
+        "integrated_gradients": integrated_gradients,
+        "grad_cam": grad_cam,
+    }[parsed.base]
     targets = torch.as_tensor(targets, dtype=torch.long).reshape(-1)
     if targets.shape[0] != n:
         raise ValueError(
@@ -337,11 +578,20 @@ def explain_batch(
             images[start:start + batch_size],
             target=targets[start:start + batch_size],
             device=device,
-            **kw,
+            **options,
         )
         for start in range(0, n, batch_size)
     ]
-    return np.concatenate(chunks, axis=0)
+    attributions = np.concatenate(chunks, axis=0)
+
+    # Rolled AFTER concatenation, not per chunk, so the offset an image gets
+    # depends on its position in the cell and not on the batch size it happened
+    # to be computed under. Otherwise a resumed run at a different batch size
+    # would produce a different control from identical inputs.
+    if parsed.rolled:
+        attributions = roll_attribution(attributions, seed=roll_seed)
+
+    return attributions
 
 
 def to_common_grid(attribution: np.ndarray, grid: int = 8) -> np.ndarray:
@@ -374,8 +624,9 @@ def explainer_options(
     explainer: str,
     *,
     ig_steps: int = IG_STEPS,
-    baseline: str = "black",
+    baseline: str = DEFAULT_IG_BASELINE,
     random_seed: int = 0,
+    roll_seed: int = 0,
 ) -> dict:
     """The options this explainer actually consumes, and nothing else.
 
@@ -387,22 +638,52 @@ def explainer_options(
     Only the options the dispatched explainer reads are returned. Grad-CAM reads
     none, so changing `ig_steps` must not invalidate a Grad-CAM artifact; keying
     every explainer on every option would fork the cache for no reason and cost
-    quota this project does not have.
+    quota this project does not have. `roll_seed` follows the same rule and is
+    omitted unless the name actually asks for a roll.
 
     `baseline` matters beyond correctness: E6 varies the IG baseline, so it has to
     be part of the key or the ablation's attributions would collide with the
     frozen protocol's and silently serve the wrong ones.
+
+    `grid` comes from the name rather than from an argument, so a config naming
+    `random_lowres_4` cannot be run at a grid of 8 by a stale keyword.
     """
+    parsed = parse_explainer(explainer)
     options = {
         "integrated_gradients": {"steps": ig_steps, "baseline": baseline},
         "grad_cam": {},
         "random": {"seed": random_seed},
-    }
-    if explainer not in options:
-        raise ValueError(
-            f"unknown explainer {explainer!r}; expected one of {sorted(options)}"
-        )
-    return options[explainer]
+        "random_lowres": {"grid": parsed.grid, "seed": random_seed},
+    }[parsed.base]
+    if parsed.rolled:
+        options = {**options, "roll_seed": roll_seed}
+    return options
+
+
+# Config key -> `explainer_options` keyword. The config spells the IG baseline
+# `ig_baseline` so it cannot be confused with the removal `imputation`, which is
+# a different axis that happens to share the value names "mean", "black", "blur".
+CONFIG_OPTION_KEYS = (
+    ("ig_steps", "ig_steps"),
+    ("ig_baseline", "baseline"),
+    ("roll_seed", "roll_seed"),
+)
+
+
+def explain_options_from_config(config: dict) -> dict:
+    """The attribution settings a config asks for, in `explainer_options` terms.
+
+    Both the filler and the report need this, and they must agree exactly: the
+    filler decides what a curve is computed under and the report decides what key
+    it is looked up by, so a difference of one entry means a full cache reads as
+    an empty one. They each held their own copy of this mapping for one commit,
+    which is the same two-copies-of-one-fact shape as every cache-key defect this
+    module has been rewritten to close.
+
+    An option is included only when the config names it, so a config silent about
+    an option produces the key it always produced.
+    """
+    return {name: config[key] for key, name in CONFIG_OPTION_KEYS if key in config}
 
 
 def explain_spec(
@@ -411,8 +692,9 @@ def explain_spec(
     explainer: str,
     indices: np.ndarray,
     ig_steps: int = IG_STEPS,
-    baseline: str = "black",
+    baseline: str = DEFAULT_IG_BASELINE,
     random_seed: int = 0,
+    roll_seed: int = 0,
 ) -> dict:
     """The cache key for this cell's attributions. The only place it is built.
 
@@ -434,7 +716,11 @@ def explain_spec(
         "explain",
         explainer=explainer,
         options=explainer_options(
-            explainer, ig_steps=ig_steps, baseline=baseline, random_seed=random_seed
+            explainer,
+            ig_steps=ig_steps,
+            baseline=baseline,
+            random_seed=random_seed,
+            roll_seed=roll_seed,
         ),
         evaluated=eval_digest(indices),
         inputs={"predict": PREDICT_VERSION},
@@ -470,8 +756,9 @@ def explain_cell(
     indices: np.ndarray,
     device: str = "cpu",
     ig_steps: int = IG_STEPS,
-    baseline: str = "black",
+    baseline: str = DEFAULT_IG_BASELINE,
     random_seed: int = 0,
+    roll_seed: int = 0,
 ) -> np.ndarray:
     """Compute attributions for a cell, checking cache first.
 
@@ -490,7 +777,8 @@ def explain_cell(
                  `fixed_eval_indices(n_eval_images)`. Part of the cache key.
         device: Device to run on.
         ig_steps: Number of IG integration steps.
-        baseline: Baseline for IG ("black" or "blur").
+        baseline: Baseline for IG, one of IG_BASELINES.
+        roll_seed: Seed for the `_rolled` offsets, where the name asks for them.
         random_seed: Seed for random attribution reproducibility.
 
     Returns:
@@ -502,16 +790,15 @@ def explain_cell(
     from .data import load_cell_images, to_normalised_tensor
     from .predict import PREDICT_VERSION, predict_spec as predict_key
 
-    options = explainer_options(
-        explainer, ig_steps=ig_steps, baseline=baseline, random_seed=random_seed
-    )
-    spec = explain_spec(
-        cell,
-        explainer=explainer,
-        indices=indices,
+    settings = dict(
         ig_steps=ig_steps,
         baseline=baseline,
         random_seed=random_seed,
+        roll_seed=roll_seed,
+    )
+    options = explainer_options(explainer, **settings)
+    spec = explain_spec(
+        cell, explainer=explainer, indices=indices, **settings
     )
 
     # Check cache first
@@ -575,7 +862,7 @@ def ig_completeness_error(
     x: torch.Tensor,
     target: int,
     attribution: np.ndarray,
-    baseline: str = "black",
+    baseline: str = DEFAULT_IG_BASELINE,
     device: str = "cpu",
 ) -> float:
     """Relative completeness error of an IG approximation.
@@ -588,27 +875,15 @@ def ig_completeness_error(
         x: Input images (n, 3, 32, 32) in normalized space.
         target: Target class index.
         attribution: IG attribution array of shape (n, 32, 32).
-        baseline: "black" or "blur".
+        baseline: One of IG_BASELINES. Must be the baseline the attribution was
+            computed with, or the error is measured against the wrong reference.
         device: Device to run on.
 
     Returns:
         Relative error as a float in [0, 1].
     """
     x = x.to(device)
-
-    # Compute baseline
-    if baseline == "black":
-        x_baseline = torch.zeros_like(x)
-    elif baseline == "blur":
-        x_np = x.cpu().numpy()
-        n = x.shape[0]
-        x_baseline_np = np.zeros_like(x_np)
-        for i in range(n):
-            for c in range(3):
-                x_baseline_np[i, c] = ndimage.gaussian_filter(x_np[i, c], sigma=1.5)
-        x_baseline = torch.from_numpy(x_baseline_np).to(device)
-    else:
-        raise ValueError(f"baseline must be 'black' or 'blur', got {baseline!r}")
+    x_baseline = _ig_baseline(x, baseline, device)
 
     model.eval()
     with torch.no_grad():
