@@ -292,6 +292,114 @@ def discover_cifar10c_root(
     return None
 
 
+# What torchvision's CIFAR10 expects under its root, and the files it md5-checks
+# before deciding whether to download. Named here so `holds_cifar10` asks the
+# same question `_check_integrity` will ask: a directory that satisfies one and
+# not the other is the bad case, because torchvision would then try to download
+# into it, and a mounted Kaggle Dataset is read-only.
+CIFAR10_BASE_FOLDER = "cifar-10-batches-py"
+CIFAR10_REQUIRED_FILES = (
+    "data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4",
+    "data_batch_5", "test_batch", "batches.meta",
+)
+
+
+def holds_cifar10(directory: Path) -> bool:
+    """Whether this directory can serve as a torchvision CIFAR-10 `root`.
+
+    Checks for every file the loader needs, train batches included, because the
+    fill trains a model and the report reads test labels from the same root. A
+    directory holding only `test_batch` would pass a laxer check and then fail
+    partway through training, after the clone and the corruption mount had
+    already been set up.
+    """
+    try:
+        folder = directory / CIFAR10_BASE_FOLDER
+        return all((folder / name).exists() for name in CIFAR10_REQUIRED_FILES)
+    except OSError:
+        return False
+
+
+def discover_cifar10_root(
+    base: Path | str = Path("/kaggle/input"),
+    max_depth: int = 5,
+) -> Optional[Path]:
+    """Find an attached Dataset that can serve as CIFAR-10's root, or None.
+
+    The same problem `discover_cifar10c_root` solves, for the clean data, and it
+    costs real time rather than just convenience. `--data-root` defaults to
+    `/kaggle/working/data`, which Kaggle wipes between sessions, so every fresh
+    session re-downloads 170 MB from the torchvision mirror: measured at 14m50s
+    and 24m12s on two runs of this project, at 68 to 192 kB/s. A mounted copy is
+    already on local disk.
+
+    Returns the directory CONTAINING `cifar-10-batches-py`, which is what
+    torchvision wants as `root`. With the data present and intact,
+    `download=True` verifies and returns without writing, so a read-only mount
+    is fine -- which is why `holds_cifar10` checks for every file the loader
+    needs rather than just for the folder. Half a dataset would send torchvision
+    down the download path with a read-only root and fail.
+
+    Breadth-first in sorted order, so the shallowest match wins and the choice
+    is deterministic when several are attached.
+    """
+    base = Path(base)
+    if not base.exists():
+        return None
+
+    frontier = [base]
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        next_frontier: list[Path] = []
+        for directory in frontier:
+            try:
+                if holds_cifar10(directory):
+                    return directory
+                next_frontier.extend(
+                    sorted(p for p in directory.iterdir() if p.is_dir())
+                )
+            except OSError:
+                continue
+        frontier = next_frontier
+
+    return None
+
+
+CONVENTIONAL_DATA_ROOT = "/kaggle/working/data"
+
+
+def resolve_cifar10_root(writable: Path | str = CONVENTIONAL_DATA_ROOT) -> str:
+    """Where clean CIFAR-10 is, preferring a copy already on local disk.
+
+    Lives here rather than in a script because both the fill and the report need
+    the answer and they must agree: the report reads its test labels from this
+    root, and a report that resolved differently from the fill would start a
+    second 170 MB download of data the fill already had.
+
+    Order matters, and it is not `resolve_cifar10c_dir`'s order:
+
+    1. The writable path, if it already holds the data. A second run in the same
+       session must not be sent to a mount when a local copy exists, and this is
+       also where a previous run's download landed.
+    2. An attached Dataset that holds it. `/kaggle/working` is wiped between
+       sessions, so without this every fresh session re-downloads 170 MB --
+       measured at 14m50s and 24m12s on two runs of this project, at 68 to
+       192 kB/s. With the files present and intact, torchvision verifies and
+       returns without writing, so a read-only mount is fine.
+    3. The writable path regardless, which is where a download lands. No mounted
+       copy is not an error; it is the first-session case.
+    """
+    if holds_cifar10(Path(writable)):
+        return str(writable)
+
+    found = discover_cifar10_root()
+    if found is not None:
+        return str(found)
+
+    return str(writable)
+
+
 MOUNT_LISTING_MAX_LINES = 40
 MOUNT_LISTING_FILES_PER_DIR = 6
 

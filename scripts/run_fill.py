@@ -33,7 +33,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from shiftprofile.data import discover_cifar10c_root  # noqa: E402
+from shiftprofile.data import (  # noqa: E402
+    discover_cifar10c_root,
+    resolve_cifar10_root,
+)
 from shiftprofile.fill import main  # noqa: E402  (needs sys.path set first)
 
 CONVENTIONAL_CORRUPT_ROOT = "/kaggle/input/cifar-10-c"
@@ -43,7 +46,6 @@ DEFAULTS: list[tuple[str, str]] = [
     ("--config", str(REPO_ROOT / "configs" / "pilot.yaml")),
     ("--budget-minutes", "600"),
     ("--cache-write", "/kaggle/working/cache"),
-    ("--data-root", "/kaggle/working/data"),
 ]
 
 # Added only if it exists. A read root that is not there is not an error -- the
@@ -80,6 +82,8 @@ def build_argv(argv: list[str]) -> list[str]:
             out += [flag, value]
     if "--corrupt-root" not in out:
         out += ["--corrupt-root", resolve_corrupt_root()]
+    if "--data-root" not in out:
+        out += ["--data-root", resolve_cifar10_root()]
     if "--cache-read" not in out and Path(OPTIONAL_READ_ROOT).exists():
         out += ["--cache-read", OPTIONAL_READ_ROOT]
     return out

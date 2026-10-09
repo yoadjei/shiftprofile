@@ -7,6 +7,11 @@ import torch
 from pathlib import Path
 from shiftprofile.data import cifar as cifar_module
 from shiftprofile.data.cifar import (
+    CIFAR10_BASE_FOLDER,
+    CIFAR10_REQUIRED_FILES,
+    discover_cifar10_root,
+    holds_cifar10,
+    resolve_cifar10_root,
     describe_mounts,
     discover_cifar10c_root,
     holds_cifar10c,
@@ -564,3 +569,71 @@ class TestDescribeMounts:
         lines = describe_mounts(base)
         assert len(lines) <= cifar_module.MOUNT_LISTING_MAX_LINES + 1
         assert "truncated" in lines[-1]
+
+
+class TestCifar10RootDiscovery:
+    """Finding a mounted CIFAR-10 instead of re-downloading 170 MB.
+
+    `/kaggle/working` is wiped between sessions, so the default root is empty
+    every fresh session and torchvision re-downloads: measured at 14m50s and
+    24m12s on two runs of this project. These pin the conditions under which a
+    mount is used, because the failure mode of getting it wrong is not a missed
+    optimisation -- it is torchvision deciding to download into a read-only
+    Kaggle mount, partway into a session, after the clone and the corruption
+    mount have already succeeded.
+    """
+
+    def _make(self, root, *, missing=()):
+        folder = root / CIFAR10_BASE_FOLDER
+        folder.mkdir(parents=True)
+        for name in CIFAR10_REQUIRED_FILES:
+            if name not in missing:
+                (folder / name).write_bytes(b"x")
+        return root
+
+    def test_a_complete_layout_is_accepted(self, tmp_path):
+        assert holds_cifar10(self._make(tmp_path / "ds"))
+
+    def test_the_root_is_the_parent_of_the_batches_folder(self, tmp_path):
+        """torchvision takes the directory CONTAINING `cifar-10-batches-py`, not
+        the folder itself. Returning the folder would make it look for
+        `cifar-10-batches-py/cifar-10-batches-py`."""
+        root = self._make(tmp_path / "ds")
+        assert discover_cifar10_root(tmp_path) == root
+
+    @pytest.mark.parametrize("missing", ["test_batch", "data_batch_3", "batches.meta"])
+    def test_a_partial_dataset_is_refused(self, tmp_path, missing):
+        """Every file the loader needs, train batches included: the fill trains
+        and the report reads test labels from the same root. A laxer check would
+        accept a test-only upload and fail partway through training."""
+        root = self._make(tmp_path / "ds", missing=(missing,))
+        assert not holds_cifar10(root)
+        assert discover_cifar10_root(tmp_path) is None
+
+    def test_it_finds_a_dataset_nested_several_levels_down(self, tmp_path):
+        """Uploading a folder leaves the data deeper than one level, which is the
+        bug `discover_cifar10c_root` already had to grow a fix for."""
+        root = self._make(tmp_path / "ds" / "archive" / "cifar10")
+        assert discover_cifar10_root(tmp_path) == root
+
+    def test_the_shallowest_match_wins_so_the_choice_is_deterministic(self, tmp_path):
+        deep = self._make(tmp_path / "a" / "nested")
+        shallow = self._make(tmp_path / "b")
+        assert discover_cifar10_root(tmp_path) == shallow
+        assert holds_cifar10(deep)
+
+    def test_a_missing_base_is_not_an_error(self, tmp_path):
+        assert discover_cifar10_root(tmp_path / "nope") is None
+
+    def test_the_writable_root_wins_when_it_already_holds_the_data(self, tmp_path):
+        """A second run in the same session must not be sent to a mount when a
+        local copy exists -- that copy is also where a previous run downloaded."""
+        writable = self._make(tmp_path / "working")
+        assert resolve_cifar10_root(writable) == str(writable)
+
+    def test_the_writable_root_is_returned_when_nothing_is_mounted(self, tmp_path):
+        """No mounted copy is the first-session case, not an error: the download
+        has to land somewhere writable."""
+        empty = tmp_path / "working"
+        empty.mkdir()
+        assert resolve_cifar10_root(empty) == str(empty)

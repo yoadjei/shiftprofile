@@ -41,7 +41,11 @@ from scipy.special import softmax  # noqa: E402
 from shiftprofile.cache import ArtifactCache  # noqa: E402
 from shiftprofile.cells import CLEAN, Cell, enumerate_cells  # noqa: E402
 from shiftprofile.curves import CURVES_VERSION, REMOVAL_FRACTIONS, curves_spec  # noqa: E402
-from shiftprofile.data import fixed_eval_indices, load_cifar10_test  # noqa: E402
+from shiftprofile.data import (  # noqa: E402
+    fixed_eval_indices,
+    load_cifar10_test,
+    resolve_cifar10_root,
+)
 from shiftprofile.explain import (  # noqa: E402
     LOWRES_PREFIX,
     ROLLED_SUFFIX,
@@ -562,7 +566,10 @@ def main(argv=None) -> int:
     parser.add_argument("--cache-read", type=Path, action="append", default=[],
                         help="Cache root to read; repeatable. Defaults to the "
                              "Kaggle working cache plus the mounted dataset.")
-    parser.add_argument("--data-root", type=Path, default=Path("/kaggle/working/data"))
+    # Resolved the same way the fill resolves it, so the report reads its test
+    # labels from whichever copy the fill actually used and does not trigger a
+    # second 170 MB download of its own.
+    parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--n-resamples", type=int, default=2000)
     parser.add_argument(
         "--imputation", action="append", default=[],
@@ -589,7 +596,8 @@ def main(argv=None) -> int:
     cache = ArtifactCache(roots[0], read_roots=roots)
 
     indices = fixed_eval_indices(config["n_eval_images"])
-    _, labels = load_cifar10_test(args.data_root)
+    data_root = args.data_root or Path(resolve_cifar10_root())
+    _, labels = load_cifar10_test(data_root)
     labels = labels[indices]
 
     cells = enumerate_cells(config, config["track"])
