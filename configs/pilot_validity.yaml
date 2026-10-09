@@ -2,9 +2,13 @@
 # attribution, or the shape of the mask the attribution happens to induce?
 #
 # The four-arm E6 sweep established that faithfulness is negative for every
-# explainer under every imputation scheme -- 119 of 120 cell-by-scheme
-# measurements below zero, with the random EXPLAINER at |.| <= 9e-5, so the
-# machinery is sound and the result is a property of the measurement. It also
+# explainer under every imputation scheme. Counting only the measurements that
+# involve an actual attribution method -- 2 explainers x 4 schemes x 10 cells =
+# 80 -- 79 fail to clear zero, at 2.2 to 25.6 half-widths below it, while the
+# random EXPLAINER's own 40 sit at |.| <= 9e-5. So the machinery is sound and
+# the result is a property of the measurement. (An earlier draft of this comment
+# said "119 of 120", which smuggled the 40 control measurements into the
+# numerator of a claim about the explainers.) It also
 # showed the explainer ORDERING is a property of the scheme: Grad-CAM is 2.7x
 # worse than IG under `mean`, 12x worse under `black`, and slightly BETTER under
 # `blur`. And `fog` reverses the sign of its clean-to-severity-5 change between
