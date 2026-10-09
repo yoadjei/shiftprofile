@@ -1,0 +1,96 @@
+# P3b measurement-validity run: does removal-based faithfulness measure the
+# attribution, or the shape of the mask the attribution happens to induce?
+#
+# The four-arm E6 sweep established that faithfulness is negative for every
+# explainer under every imputation scheme -- 119 of 120 cell-by-scheme
+# measurements below zero, with the random EXPLAINER at |.| <= 9e-5, so the
+# machinery is sound and the result is a property of the measurement. It also
+# showed the explainer ORDERING is a property of the scheme: Grad-CAM is 2.7x
+# worse than IG under `mean`, 12x worse under `black`, and slightly BETTER under
+# `blur`. And `fog` reverses the sign of its clean-to-severity-5 change between
+# `blur` and `mean`, for both explainers, each beyond its own half-width.
+#
+# The explanation on offer is geometry. Grad-CAM's map is 4x4 on ResNet-18 --
+# sixteen values bilinearly upsampled to 1024 pixels -- so its "top 5%" is one
+# smooth blob, and replacing a contiguous patch leaves a 32x32 image far more
+# recognisable than scattering the same NUMBER of replaced pixels does. But
+# `paired_removal_curves` always draws its control per-pixel i.i.d., so that
+# explanation cannot be read off the existing runs: every number compares a
+# coarse mask against a scattered one and the two differ in shape before they
+# differ in content.
+#
+# This config adds the controls that settle it.
+#
+#   random_lowres_<k>   noise on a k x k lattice, ReLU'd and upsampled through
+#                       Grad-CAM's exact pipeline. Sees no model, no image and no
+#                       label, so whatever faithfulness it registers is blob size
+#                       and nothing else. k = 2,4,8,16,32 brackets Grad-CAM's 4.
+#   <name>_rolled       the explainer's own map, translated by a seeded offset.
+#                       Identical geometry, identical values, no registration to
+#                       the image it was computed from.
+#
+# Both make the matched comparison a difference of two reported numbers rather
+# than a change to `paired_removal_curves`, which pre-registration section 6
+# pins as validity control #1. The pixel control cancels exactly in that
+# difference: same control_seed, same images, same model.
+#
+# Falsifiable prediction, recorded before the run:
+#
+#   random_lowres_4 lands at -0.29 +/- 0.016 under mean / uniform_noise / black
+#   and near -0.06 under blur, reproducing grad_cam within its half-width. Then
+#   grad_cam's geometry-matched faithfulness is 0.00 +/- 0.02 and the explainer
+#   contributes nothing beyond its resolution.
+#
+# If the ladder is flat instead, or grad_cam sits well off it, the geometry
+# account is wrong and the negative result needs a different explanation. That
+# is the point of running it.
+#
+# `ig_baseline: mean` is the frozen protocol's baseline under its true name. It
+# set `torch.zeros_like(x)` and was called "black", but normalisation maps the
+# dataset MEAN to zero, so the string named a mean baseline -- the same
+# conflation as the retired `zero` imputation scheme, this time on the axis E6
+# varies. Stating it here also exercises the config key, which until now reached
+# no producer at all: `explainer_options` carried `baseline` in the cache key on
+# the strength of a comment saying E6 varies it, while no config could.
+#
+# This is the pre-registered P3 failure branch (section 8, rows 4 and 5), not a
+# repair of it.
+name: pilot_validity
+track: vision
+models:
+- resnet18
+seeds:
+- 0
+shift_families:
+- gaussian_noise
+- defocus_blur
+- fog
+severities:
+- 1
+- 3
+- 5
+explainers:
+# The protocol's two, and the control they have always been scored against.
+- integrated_gradients
+- grad_cam
+- random
+# Alignment held out, geometry held in.
+- integrated_gradients_rolled
+- grad_cam_rolled
+# Geometry alone. 4 is Grad-CAM's native resolution on this model.
+- random_lowres_2
+- random_lowres_4
+- random_lowres_8
+- random_lowres_16
+- random_lowres_32
+n_eval_images: 1000
+ig_steps: 32
+ig_baseline: mean
+roll_seed: 0
+epochs: 50
+batch_size: 256
+imputations:
+- mean
+- blur
+- uniform_noise
+- black

@@ -42,6 +42,11 @@ from shiftprofile.cache import ArtifactCache  # noqa: E402
 from shiftprofile.cells import CLEAN, Cell, enumerate_cells  # noqa: E402
 from shiftprofile.curves import CURVES_VERSION, REMOVAL_FRACTIONS, curves_spec  # noqa: E402
 from shiftprofile.data import fixed_eval_indices, load_cifar10_test  # noqa: E402
+from shiftprofile.explain import (  # noqa: E402
+    LOWRES_PREFIX,
+    ROLLED_SUFFIX,
+    explain_options_from_config,
+)
 from shiftprofile.metrics.calibration import (  # noqa: E402
     aurc,
     brier_score,
@@ -69,10 +74,12 @@ def explain_options_from(config: dict) -> dict:
     """The attribution settings the fill ran under, in `explain_spec` vocabulary.
 
     `curves_spec` needs these to name which attributions a curve was built from.
-    Derived from the same config key the fill reads, so the report cannot look
-    for curves under settings the fill never used.
+    Delegates to the explain module so the report and the filler cannot read the
+    config differently: the filler decides what a curve is computed under and the
+    report decides what key it is looked up by, so a one-entry difference makes a
+    full cache read as an empty one.
     """
-    return {"ig_steps": config["ig_steps"]} if "ig_steps" in config else {}
+    return explain_options_from_config(config)
 
 
 def imputations_from(config: dict) -> list[str]:
@@ -194,6 +201,10 @@ def faithfulness_rows(cells, cache, *, explainers, indices, imputations,
                     "low": interval.low,
                     "high": interval.high,
                     "n": interval.n,
+                    # Kept, not just summarised, because `matched_rows` needs the
+                    # per-image values of TWO explainers side by side to pair
+                    # them. A difference of two cell means carries no interval.
+                    "per_image": per_image,
                 })
     if missing:
         cell, explainer, imputation = missing[0]
@@ -204,6 +215,131 @@ def faithfulness_rows(cells, cache, *, explainers, indices, imputations,
             f"options. Skipping them is not an option: a partial grid is not the "
             f"pre-registered grid."
         )
+    return rows
+
+
+def matched_pairs(faith_rows) -> list[tuple[str, str, str]]:
+    """Which explainers have a geometry-matched control present to compare against.
+
+    Derived from what the run actually contains rather than hardcoded, so a
+    config that omits an arm produces a shorter table instead of a crash.
+
+    Two kinds of pair:
+
+    `alignment`  X against `X_rolled` -- same map, translated. Holds geometry and
+                 the value multiset exactly fixed and removes only the map's
+                 registration to the image.
+    `geometry`   grad_cam against `random_lowres_4` -- same blob size, no model.
+                 4 is ResNet-18's final feature-map resolution, which is the
+                 resolution Grad-CAM's map actually has.
+    """
+    present = {r["explainer"] for r in faith_rows}
+    pairs = [
+        (explainer, explainer + ROLLED_SUFFIX, "alignment")
+        for explainer in sorted(present)
+        if explainer + ROLLED_SUFFIX in present
+    ]
+    if "grad_cam" in present and f"{LOWRES_PREFIX}4" in present:
+        pairs.append(("grad_cam", f"{LOWRES_PREFIX}4", "geometry"))
+    return pairs
+
+
+def matched_rows(faith_rows, *, pairs=None, n_resamples=2000) -> list[dict]:
+    """Faithfulness measured against a control matched on mask geometry.
+
+    The headline number this report exists to produce. `relative_faithfulness`
+    compares an explainer against a control drawn per-pixel i.i.d., so a method
+    whose attribution map is coarse is scored against a mask that is scattered,
+    and the two masks differ in shape before they differ in content. On 32x32
+    inputs that difference dominates: replacing one contiguous patch leaves far
+    more of a CIFAR image intact than replacing the same NUMBER of scattered
+    pixels, so the coarse method's probability falls less and it is recorded as
+    less faithful -- whatever it actually pointed at.
+
+    Subtracting one faithfulness from another removes it. Both are
+    `auc(control) - auc(attribution)` over the same images with the same
+    `control_seed`, the same imputation and the same model, so the control term
+    is bitwise identical between them and cancels exactly:
+
+        matched = rf(X) - rf(R) = auc(R) - auc(X)
+
+    which is X scored directly against a control of its own geometry, and does
+    not depend on the pixel-i.i.d. control at all. Done per image and then
+    bootstrapped, because the pairing is what makes the interval tight: a
+    difference of two cell means would have no interval.
+
+    Raises:
+        MissingArtifacts: If a row lacks the per-image values the pairing needs.
+    """
+    pairs = matched_pairs(faith_rows) if pairs is None else pairs
+    by = {
+        (r["explainer"], r.get("imputation"), r["shift_family"], r["severity"]): r
+        for r in faith_rows
+    }
+
+    out = []
+    for explainer, reference, kind in pairs:
+        for key, row in by.items():
+            if key[0] != explainer:
+                continue
+            ref = by.get((reference,) + key[1:])
+            if ref is None:
+                continue
+            for name, candidate in ((explainer, row), (reference, ref)):
+                if candidate.get("per_image") is None:
+                    raise MissingArtifacts(
+                        f"{name} has no per-image faithfulness values, so it "
+                        f"cannot be paired against {reference}. These rows did "
+                        f"not come from faithfulness_rows."
+                    )
+            # Element-wise: both arrays run over `fixed_eval_indices` in the same
+            # order, so position i is the same image in both.
+            interval = bootstrap_interval(
+                row["per_image"] - ref["per_image"],
+                np.mean, n_resamples=n_resamples, seed=0,
+            )
+            out.append({
+                "explainer": explainer,
+                "reference": reference,
+                "kind": kind,
+                "imputation": key[1],
+                "shift_family": key[2],
+                "severity": key[3],
+                "matched": interval.point,
+                "half_width": interval.half_width,
+                "low": interval.low,
+                "high": interval.high,
+                "beats_control": interval.low > 0,
+            })
+    return out
+
+
+def geometry_ladder(faith_rows) -> list[dict]:
+    """Mean faithfulness per `random_lowres` grid, per imputation.
+
+    None of these arms sees the model, the image or the label, so every value
+    here is produced by blob size alone. Read as a curve against grid size: if
+    Grad-CAM's score lands on it at grid=4, the score is its resolution.
+    """
+    rows = []
+    for imputation in sorted({r.get("imputation") for r in faith_rows}, key=str):
+        for explainer in sorted(
+            {r["explainer"] for r in faith_rows
+             if r["explainer"].startswith(LOWRES_PREFIX)},
+            key=lambda name: int(name[len(LOWRES_PREFIX):]),
+        ):
+            sub = [r for r in faith_rows
+                   if r["explainer"] == explainer
+                   and r.get("imputation") == imputation]
+            if not sub:
+                continue
+            rows.append({
+                "imputation": imputation,
+                "grid": int(explainer[len(LOWRES_PREFIX):]),
+                "faithfulness": float(np.mean([r["faithfulness"] for r in sub])),
+                "half_width": float(np.mean([r["half_width"] for r in sub])),
+                "cells": len(sub),
+            })
     return rows
 
 
@@ -329,6 +465,55 @@ def _print_report(config, cal_rows, faith_rows) -> None:
                 print(f"{str(imputation):<15} {explainer:<22} {sev:>4}  "
                       f"{float(np.mean([r['faithfulness'] for r in sub])):>+13.5f}  "
                       f"{float(np.mean([r['half_width'] for r in sub])):>11.5f}")
+
+    ladder = geometry_ladder(faith_rows)
+    if ladder:
+        print()
+        print("=" * 72)
+        print("GEOMETRY LADDER   random_lowres_<grid>: noise on a grid x grid")
+        print("                  lattice, upsampled as Grad-CAM is. No model input.")
+        print("=" * 72)
+        print(f"{'imputation':<15} {'grid':>5}  {'faithfulness':>13}  {'half_width':>11}")
+        for row in ladder:
+            print(f"{str(row['imputation']):<15} {row['grid']:>5}  "
+                  f"{row['faithfulness']:>+13.5f}  {row['half_width']:>11.5f}")
+        print()
+        print("Grad-CAM's map is 4x4 on ResNet-18. If its faithfulness sits on "
+              "this\ncurve at grid=4, its score is its resolution and not its "
+              "content.")
+
+    matched = matched_rows(faith_rows)
+    if matched:
+        print()
+        print("=" * 72)
+        print("GEOMETRY-MATCHED FAITHFULNESS   explainer minus a control of the")
+        print("                                same mask geometry; >0 beats it")
+        print("=" * 72)
+        print(f"{'imputation':<15} {'explainer':<24} {'vs':<20} {'kind':<10} "
+              f"{'matched':>10}  {'half_w':>9}  verdict")
+        for imputation in sorted({r["imputation"] for r in matched}, key=str):
+            for explainer in sorted({r["explainer"] for r in matched}):
+                sub = [r for r in matched
+                       if r["imputation"] == imputation
+                       and r["explainer"] == explainer]
+                if not sub:
+                    continue
+                for reference in sorted({r["reference"] for r in sub}):
+                    pair = [r for r in sub if r["reference"] == reference]
+                    point = float(np.mean([r["matched"] for r in pair]))
+                    half = float(np.mean([r["half_width"] for r in pair]))
+                    above = sum(1 for r in pair if r["beats_control"])
+                    verdict = (
+                        f"{above}/{len(pair)} cells beat it"
+                        if above else "NO CELL BEATS ITS MATCHED CONTROL"
+                    )
+                    print(f"{str(imputation):<15} {explainer:<24} {reference:<20} "
+                          f"{pair[0]['kind']:<10} {point:>+10.5f}  {half:>9.5f}  "
+                          f"{verdict}")
+        print()
+        print("The pixel-i.i.d. control cancels exactly in this difference: both "
+              "terms\nuse the same control_seed over the same images, so what is "
+              "left is the\nexplainer scored against its own geometry.")
 
     verdicts = gate_verdicts(faith_rows)
     print()

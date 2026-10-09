@@ -31,13 +31,18 @@ from pilot_report import (  # noqa: E402
     explain_options_from,
     faithfulness_rows,
     gate_verdicts,
+    geometry_ladder,
     imputation_from,
+    matched_pairs,
+    matched_rows,
 )
 
 from shiftprofile.cache import ArtifactCache
 from shiftprofile.cells import CLEAN, Cell
 from shiftprofile.curves import CURVES_VERSION, REMOVAL_FRACTIONS, curves_spec
 from shiftprofile.data import fixed_eval_indices
+from shiftprofile.explain import explain_options_from_config, parse_explainer
+from shiftprofile.metrics.faithfulness import relative_faithfulness, removal_auc
 from shiftprofile.predict import PREDICT_VERSION, predict_spec
 
 N = 16
@@ -254,6 +259,149 @@ class TestBeatsRandom:
         assert out["cells_above_zero"] == 1
 
 
+class TestGeometryMatchedFaithfulness:
+    """The headline number of the validity branch, and the arithmetic it rests on.
+
+    `relative_faithfulness` scores an attribution against a control drawn
+    per-pixel i.i.d., so a coarse map is compared with a scattered mask and the
+    two differ in shape before they differ in content. The matched comparison
+    removes that by subtracting one faithfulness from another instead of changing
+    `paired_removal_curves`, which section 6 pins as validity control #1.
+    """
+
+    def _row(self, explainer, per_image, *, severity=5, imputation="mean"):
+        per_image = np.asarray(per_image, dtype=np.float64)
+        return {
+            "model_id": "resnet18", "seed": 0, "shift_family": "fog",
+            "severity": severity, "explainer": explainer, "imputation": imputation,
+            "faithfulness": float(per_image.mean()), "half_width": 0.01,
+            "low": float(per_image.mean()) - 0.01,
+            "high": float(per_image.mean()) + 0.01,
+            "n": len(per_image), "per_image": per_image,
+        }
+
+    def test_the_pixel_control_cancels_in_the_difference(self):
+        """Why subtracting two reported numbers is a valid direct comparison.
+
+        Both terms are `auc(control) - auc(attribution)` over the same images
+        with the same control_seed, imputation and model, so the control term is
+        bitwise identical in each and drops out:
+
+            rf(X) - rf(R) = auc(R) - auc(X)
+
+        which is X scored against a control of its own geometry and does not
+        involve the pixel-i.i.d. control at all. If this identity did not hold,
+        the matched table would be reporting a difference of two incommensurable
+        quantities.
+        """
+        fractions = np.asarray(REMOVAL_FRACTIONS, dtype=np.float64)
+        control = np.clip(1.0 - fractions, 0.0, 1.0)
+        x_curve = np.clip(1.0 - 1.7 * fractions, 0.0, 1.0)
+        r_curve = np.clip(1.0 - 1.2 * fractions, 0.0, 1.0)
+
+        rf_x = relative_faithfulness(x_curve, control, fractions, imputation="mean")
+        rf_r = relative_faithfulness(r_curve, control, fractions, imputation="mean")
+
+        assert rf_x - rf_r == pytest.approx(
+            removal_auc(r_curve, fractions) - removal_auc(x_curve, fractions)
+        )
+
+    def test_the_matched_value_is_the_per_image_mean_difference(self):
+        """Paired per image, not a difference of two cell means.
+
+        A difference of means would carry no interval, and the interval is the
+        only thing that says whether an arm beat its matched control or landed
+        inside the noise -- which is the entire verdict the table prints.
+        """
+        explainer = np.array([0.10, 0.20, 0.30, 0.05])
+        reference = np.array([0.08, 0.25, 0.20, 0.05])
+        rows = [
+            self._row("grad_cam", explainer),
+            self._row("grad_cam_rolled", reference),
+        ]
+
+        [out] = matched_rows(rows, n_resamples=200)
+
+        assert out["explainer"] == "grad_cam"
+        assert out["reference"] == "grad_cam_rolled"
+        assert out["kind"] == "alignment"
+        assert out["matched"] == pytest.approx(float((explainer - reference).mean()))
+        assert out["half_width"] >= 0
+
+    def test_a_row_without_its_per_image_values_raises(self):
+        """`faithfulness_rows` keeps `per_image` precisely so the pairing is
+        possible. Rows assembled any other way cannot be paired, and reporting a
+        silently shorter table is the failure this whole script replaced."""
+        rows = [
+            self._row("grad_cam", [0.1, 0.2]),
+            self._row("grad_cam_rolled", [0.1, 0.2]),
+        ]
+        rows[1]["per_image"] = None
+
+        with pytest.raises(MissingArtifacts, match="per-image"):
+            matched_rows(rows, n_resamples=200)
+
+    def test_the_pairs_come_from_what_the_run_contains(self):
+        """A config that omits an arm must produce a shorter table, not a crash:
+        the geometry and alignment arms are new and will not be present in every
+        cache this report is pointed at."""
+        rolled_only = [
+            self._row("integrated_gradients", [0.1, 0.2]),
+            self._row("integrated_gradients_rolled", [0.1, 0.2]),
+        ]
+        assert matched_pairs(rolled_only) == [
+            ("integrated_gradients", "integrated_gradients_rolled", "alignment")
+        ]
+        assert matched_pairs([self._row("grad_cam", [0.1])]) == []
+
+
+class TestTheGeometryLadder:
+    """Every rung sees no model, no image and no label, so it is blob size alone."""
+
+    def _row(self, explainer, faithfulness, *, severity=5, imputation="mean"):
+        return {
+            "model_id": "resnet18", "seed": 0, "shift_family": "fog",
+            "severity": severity, "explainer": explainer, "imputation": imputation,
+            "faithfulness": faithfulness, "half_width": 0.01,
+            "low": faithfulness - 0.01, "high": faithfulness + 0.01, "n": 4,
+        }
+
+    def _rows(self):
+        return (
+            [self._row(f"random_lowres_{g}", -0.3 + 0.01 * g) for g in (8, 2, 32, 4, 16)]
+            + [self._row(name, -0.29) for name in
+               ("grad_cam", "integrated_gradients", "random", "grad_cam_rolled")]
+        )
+
+    def test_the_rungs_are_ordered_by_grid_whatever_order_the_rows_arrive_in(self):
+        """It is read as a curve against blob size, so the rows have to come out
+        in that order. `sorted()` on the names would give 16 before 2."""
+        ladder = geometry_ladder(self._rows())
+        assert [row["grid"] for row in ladder] == [2, 4, 8, 16, 32]
+
+    def test_only_the_lowres_arms_are_rungs(self):
+        """`random` is the control the protocol subtracts, not the grid=32 rung:
+        it is signed with no ReLU and no interpolation, so it ranks differently
+        under |attribution| than any point on this curve. Grad-CAM is the thing
+        being located ON the curve and cannot also be part of it.
+        """
+        ladder = geometry_ladder(self._rows())
+        assert len(ladder) == 5
+        assert all(row["cells"] == 1 for row in ladder)
+
+    def test_each_imputation_gets_its_own_ladder(self):
+        """The pilot's whole finding is that the scheme changes the ordering, so
+        averaging the schemes together would hide the effect being measured."""
+        rows = self._rows() + [
+            self._row(f"random_lowres_{g}", -0.06, imputation="blur")
+            for g in (2, 4, 8, 16, 32)
+        ]
+        ladder = geometry_ladder(rows)
+        assert [(row["imputation"], row["grid"]) for row in ladder] == [
+            ("blur", g) for g in (2, 4, 8, 16, 32)
+        ] + [("mean", g) for g in (2, 4, 8, 16, 32)]
+
+
 class TestConfigReading:
     def test_the_singular_imputation_spelling_is_honoured(self):
         """Both configs spell it singular and the filler long read it as plural,
@@ -271,6 +419,25 @@ class TestConfigReading:
         assert explain_options_from({"ig_steps": 4}) == {"ig_steps": 4}
         assert explain_options_from({}) == {}
 
+    def test_the_ig_baseline_is_passed_through_too(self):
+        """It was not, and `fill` did not forward it either, so a pre-registered
+        ablation axis sat in the cache key with no way to set it."""
+        assert explain_options_from({"ig_baseline": "black"}) == {"baseline": "black"}
+
+    def test_the_report_reads_the_config_through_the_filler_s_own_function(self):
+        """One source, asserted rather than maintained by hand. The filler decides
+        what a curve is computed under and the report decides what key it is
+        looked up by; a one-entry difference makes a full cache read as an empty
+        one, and they held separate copies of this mapping for one commit."""
+        config = {
+            "ig_steps": 16, "ig_baseline": "black", "roll_seed": 2,
+            "epochs": 50, "imputations": ["mean"],
+        }
+        assert explain_options_from(config) == explain_options_from_config(config)
+        assert explain_options_from(config) == {
+            "ig_steps": 16, "baseline": "black", "roll_seed": 2,
+        }
+
 
 def test_the_pilot_config_is_readable_by_this_script():
     """A guard against the config and the report drifting apart again."""
@@ -282,6 +449,33 @@ def test_the_pilot_config_is_readable_by_this_script():
     assert config["n_eval_images"] == 1000
     assert imputation_from(config) == "mean"
     assert explain_options_from(config) == {"ig_steps": 32}
+
+
+def test_the_validity_config_asks_for_arms_that_exist():
+    """The same guard for the config that adds the new arms.
+
+    Every rung and every control is requested by NAME, and the name carries the
+    grid and the roll, so a typo is not a bad value in a field -- it is an
+    explainer the dispatch has never heard of, found after the GPU time is spent.
+    `parse_explainer` is the one place that knows, so the config is checked
+    against it here rather than at the end of a run.
+    """
+    import yaml
+
+    config = yaml.safe_load(
+        (Path(pilot_report.REPO_ROOT) / "configs" / "pilot_validity.yaml").read_text()
+    )
+    for explainer in config["explainers"]:
+        parse_explainer(explainer)
+
+    assert explain_options_from(config) == {
+        "ig_steps": 32, "baseline": "mean", "roll_seed": 0,
+    }
+    assert matched_pairs([{"explainer": name} for name in config["explainers"]]) == [
+        ("grad_cam", "grad_cam_rolled", "alignment"),
+        ("integrated_gradients", "integrated_gradients_rolled", "alignment"),
+        ("grad_cam", "random_lowres_4", "geometry"),
+    ]
 
 
 class TestThePrintedReport:
