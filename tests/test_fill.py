@@ -19,7 +19,12 @@ import pytest
 from shiftprofile.cache import ArtifactCache
 from shiftprofile.cells import Cell, CLEAN
 from shiftprofile.data import fixed_eval_indices
-from shiftprofile.fill import FillReport, load_config, fill
+from shiftprofile.fill import (
+    FillReport,
+    ProgressReporter,
+    fill,
+    load_config,
+)
 from shiftprofile.predict import PREDICT_VERSION, predict_spec
 
 
@@ -895,3 +900,57 @@ class TestTrainingIsNotSilent:
         assert "model resnet18 seed 0" in out, (
             "a reader needs to know a model step started before it goes quiet"
         )
+
+
+class TestProgressReporter:
+    """Rate-limiting the progress lines, and why there still are some.
+
+    The unbounded version printed one line per work unit. At 510 units it
+    overran Kaggle's notebook output buffer, which discards the OLDEST lines, so
+    the report tables that print last were lost and a two-hour run had to be
+    repeated. These pin the shape of the compromise: a short stage stays fully
+    legible, a long one is summarised, and neither goes silent.
+    """
+
+    def _run(self, capsys, units, **kw):
+        clock = iter(range(10_000))
+        report = ProgressReporter(now=lambda: float(next(clock)), **kw)
+        for stage, cell_id in units:
+            report(stage, cell_id)
+        # splitlines on the raw output, not on a stripped copy: these lines are
+        # indented on purpose, to sit under the stage headers the CLI prints.
+        return capsys.readouterr().out.splitlines()
+
+    def test_long_stage_is_summarised_not_silenced(self, capsys):
+        lines = self._run(capsys, [("curves", f"c{i}") for i in range(400)])
+        assert len(lines) < 40, f"still {len(lines)} lines; the buffer overran at 510"
+        assert len(lines) > 10, "a four-hundred-unit stage must not go quiet"
+
+    def test_the_first_units_of_a_stage_print_in_full(self, capsys):
+        lines = self._run(capsys, [("curves", f"c{i}") for i in range(400)],
+                          verbose_units=12, every=25)
+        assert lines[0] == "  curves: c0"
+        assert lines[11] == "  curves: c11"
+
+    def test_a_stage_shorter_than_the_verbose_window_prints_entirely(self, capsys):
+        lines = self._run(capsys, [("predict", f"p{i}") for i in range(10)])
+        assert lines == [f"  predict: p{i}" for i in range(10)]
+
+    def test_the_heartbeat_carries_the_rate_that_diagnosed_the_slow_cell(self, capsys):
+        """Per-unit timing is the number nobody had when one attribution cell
+        was taking 55 minutes and a six-hour run looked merely slow."""
+        lines = self._run(capsys, [("curves", f"c{i}") for i in range(30)])
+        assert "s/unit" in lines[-1]
+        assert "25 units" in lines[-1]
+
+    def test_the_window_resets_per_stage(self, capsys):
+        """Each stage gets its own verbose window, so the curves stage is not
+        silent just because explain used the budget."""
+        units = ([("explain", f"e{i}") for i in range(30)]
+                 + [("curves", f"c{i}") for i in range(5)])
+        lines = self._run(capsys, units)
+        assert lines[-5:] == [f"  curves: c{i}" for i in range(5)]
+
+    def test_a_nonsense_interval_is_refused(self):
+        with pytest.raises(ValueError, match="every"):
+            ProgressReporter(every=0)

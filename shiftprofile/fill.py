@@ -97,6 +97,62 @@ class RunManifest:
         self.close()
 
 
+class ProgressReporter:
+    """Rate-limited progress, because an unbounded one cost a two-hour run.
+
+    The filler printed one line per work unit. At 510 units that overran
+    Kaggle's notebook output buffer, and the buffer discards the OLDEST lines --
+    so the three report tables, which print last, were gone, the cache went with
+    the session, and the whole run had to be repeated.
+
+    Printing nothing is not the alternative. A silent cell on a preemptible
+    runner is indistinguishable from a hung one, which is how a healthy nine-hour
+    pilot nearly got killed by hand, and per-unit timing is the number that
+    diagnosed the 55-minute attribution cell nobody could see.
+
+    So: every unit of a stage until `verbose_units` have gone by, then one
+    counted line every `every` units carrying the elapsed time and the per-unit
+    rate. A stage short enough to read in full still prints in full; a stage of
+    four hundred prints about sixteen lines instead of four hundred, and each one
+    says more than the line it replaces.
+    """
+
+    def __init__(
+        self,
+        *,
+        verbose_units: int = 12,
+        every: int = 25,
+        now: Callable[[], float] = time.monotonic,
+    ):
+        if every < 1:
+            raise ValueError(f"every must be at least 1, got {every}")
+        self.verbose_units = verbose_units
+        self.every = every
+        self._now = now
+        self._stage: Optional[str] = None
+        self._seen = 0
+        self._stage_start = 0.0
+
+    def __call__(self, stage: str, cell_id: str) -> None:
+        if stage != self._stage:
+            self._stage = stage
+            self._seen = 0
+            self._stage_start = self._now()
+
+        self._seen += 1
+        if self._seen <= self.verbose_units:
+            print(f"  {stage}: {cell_id}", flush=True)
+            return
+
+        if self._seen % self.every == 0:
+            elapsed = self._now() - self._stage_start
+            print(
+                f"  {stage}: {self._seen} units, {elapsed:.0f}s "
+                f"({elapsed / self._seen:.1f}s/unit), at {cell_id}",
+                flush=True,
+            )
+
+
 @dataclass
 class FillReport:
     """Summary of what a fill() run completed, skipped, and failed on."""
@@ -600,7 +656,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "explain": explain_stage,
                 "curves": curves_stage,
             },
-            progress=lambda stage, cell_id: print(f"  {stage}: {cell_id}", flush=True),
+            progress=ProgressReporter(),
             manifest=manifest,
         )
 
