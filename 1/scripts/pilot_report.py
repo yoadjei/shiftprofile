@@ -347,13 +347,30 @@ def geometry_ladder(faith_rows) -> list[dict]:
     return rows
 
 
-def gate_verdicts(faith_rows, *, gate_ratio=GATE_RATIO, severity=GATE_SEVERITY) -> list[dict]:
-    """The P3 gate, per (explainer, shift family).
+def gate_verdicts(faith_rows, *, gate_ratio=GATE_RATIO, severity=GATE_SEVERITY,
+                  value_key="faithfulness") -> list[dict]:
+    """The P3 gate, per (explainer, reference, shift family).
 
     Half-width under `gate_ratio` of the clean-to-severity-5 change. The
     half-width taken is the LARGER of the two cells being compared: a change is
     only as well resolved as its blurrier endpoint, and taking the smaller would
     flatter the gate.
+
+    `value_key` names the column gated. The default gates `faithfulness`, which
+    is what section 4 was written against, and nothing about that path changes.
+    But the validity run showed that column is confounded: `random_lowres_2`
+    sees no model, no image and no label and still scores far below zero, and the
+    geometry ladder moves monotonically with blob size. Gating a confounded
+    quantity makes its verdict uninterpretable in BOTH directions -- a pass
+    would be a well-resolved artifact -- so `matched_rows` output is gated too,
+    under `value_key="matched"`, and that is the table section 4's 1000-vs-2000
+    decision reads.
+
+    The grouping key carries `reference` because a matched row is a PAIR and one
+    explainer can have two of them: `grad_cam` is compared against both
+    `grad_cam_rolled` and `random_lowres_4`. Keyed on the explainer alone, the
+    second would overwrite the first and the gate would silently report half the
+    arms. Raw rows have no `reference`, so their key is unchanged.
 
     A change no larger than its own half-width is reported as undefined rather
     than as a ratio. "The effect we are trying to resolve is absent" is a
@@ -369,38 +386,50 @@ def gate_verdicts(faith_rows, *, gate_ratio=GATE_RATIO, severity=GATE_SEVERITY) 
     """
     by = {}
     for r in faith_rows:
-        key = (r["explainer"], r.get("imputation"), r["shift_family"], r["severity"])
+        key = (r["explainer"], r.get("reference"), r.get("imputation"),
+               r["shift_family"], r["severity"])
         by[key] = r
 
     families = sorted({
         r["shift_family"] for r in faith_rows if r["shift_family"] != CLEAN
     })
     schemes = sorted({r.get("imputation") for r in faith_rows}, key=str)
+    # `str` on the reference so a run mixing raw rows (reference None) with
+    # matched ones does not die comparing None against a name.
+    arms = sorted({(r["explainer"], r.get("reference")) for r in faith_rows},
+                  key=lambda arm: (arm[0], str(arm[1])))
     verdicts = []
     for imputation in schemes:
-        for explainer in sorted({r["explainer"] for r in faith_rows}):
-            clean = by.get((explainer, imputation, CLEAN, 0))
+        for explainer, reference in arms:
+            clean = by.get((explainer, reference, imputation, CLEAN, 0))
             if clean is None:
                 continue
             for family in families:
-                severe = by.get((explainer, imputation, family, severity))
+                severe = by.get((explainer, reference, imputation, family, severity))
                 if severe is None:
                     continue
-                change = severe["faithfulness"] - clean["faithfulness"]
+                change = severe[value_key] - clean[value_key]
                 half_width = max(clean["half_width"], severe["half_width"])
                 resolved = abs(change) > half_width
                 ratio = half_width / abs(change) if resolved else None
-                verdicts.append({
+                verdict = {
                     "explainer": explainer,
                     "imputation": imputation,
                     "shift_family": family,
-                    "clean": clean["faithfulness"],
-                    "severe": severe["faithfulness"],
+                    "clean": clean[value_key],
+                    "severe": severe[value_key],
                     "change": change,
                     "half_width": half_width,
                     "ratio": ratio,
                     "passes": ratio is not None and ratio < gate_ratio,
-                })
+                }
+                if reference is not None:
+                    # Added only on matched rows, so the raw gate's record stays
+                    # byte-identical to the one section 4 and the existing tests
+                    # pin. A key appearing on every row would change what every
+                    # consumer of the raw gate receives, for no raw-gate reason.
+                    verdict["reference"] = reference
+                verdicts.append(verdict)
     return verdicts
 
 
@@ -424,6 +453,62 @@ def beats_random(faith_rows) -> list[dict]:
             "mean_faithfulness": float(np.mean([r["faithfulness"] for r in rows])),
         })
     return out
+
+
+def _gate_label(verdict) -> str:
+    """How a gate row names the arm it gated.
+
+    A matched row is a PAIR, and one explainer can have two references:
+    `grad_cam` is gated against `grad_cam_rolled` and against
+    `random_lowres_4`. Printing the explainer alone would put the same name on
+    two rows with different numbers and no way to tell which comparison is
+    which.
+    """
+    reference = verdict.get("reference")
+    if reference is None:
+        return verdict["explainer"]
+    return f"{verdict['explainer']} vs {reference}"
+
+
+def _print_gate_table(verdicts, *, name, heading, column, footnote) -> None:
+    """One gate table and its summary, shared by the raw and matched gates.
+
+    Shared so the two cannot drift apart in formatting or in how they count:
+    the report now prints the same bar applied to two different quantities, and
+    a reader comparing them has to be able to trust that the only difference
+    between the tables is the quantity gated.
+    """
+    print()
+    print("=" * 72)
+    for line in heading:
+        print(line)
+    print("=" * 72)
+    width = max([22] + [len(_gate_label(v)) for v in verdicts])
+    print(f"{'imputation':<15} {column:<{width}} {'family':<16} {'change':>10}  "
+          f"{'half_w':>9}  {'ratio':>8}  verdict")
+    for v in verdicts:
+        if v["ratio"] is None:
+            # Not FAIL. The change is no larger than its own half-width, so there
+            # is nothing to resolve -- which for the `random` explainer is the
+            # control behaving as a control, not a result failing a bar.
+            ratio, verdict = "n/a", "no change"
+        else:
+            ratio, verdict = f"{v['ratio']:.3f}", "PASS" if v["passes"] else "FAIL"
+        print(f"{str(v.get('imputation')):<15} {_gate_label(v):<{width}} "
+              f"{v['shift_family']:<16} {v['change']:>+10.5f}  "
+              f"{v['half_width']:>9.5f}  {ratio:>8}  {verdict}")
+
+    decided = [v for v in verdicts if v["ratio"] is not None]
+    passed = [v for v in decided if v["passes"]]
+    print()
+    if not decided:
+        print(f"GATE ({name}) UNDECIDABLE: no clean-to-severe change exceeds "
+              f"its half-width.")
+    else:
+        print(f"GATE ({name}): {len(passed)}/{len(decided)} resolvable pairs pass.")
+    if len(passed) != len(decided) or not decided:
+        print(footnote)
+    print("=" * 72)
 
 
 def _print_report(config, cal_rows, faith_rows) -> None:
@@ -519,42 +604,51 @@ def _print_report(config, cal_rows, faith_rows) -> None:
               "terms\nuse the same control_seed over the same images, so what is "
               "left is the\nexplainer scored against its own geometry.")
 
-    verdicts = gate_verdicts(faith_rows)
-    print()
-    print("=" * 72)
-    print(f"P3 GATE   half-width < {GATE_RATIO:.0%} of the clean-to-severity-"
-          f"{GATE_SEVERITY} change")
-    print("=" * 72)
-    print(f"{'imputation':<15} {'explainer':<22} {'family':<16} {'change':>10}  "
-          f"{'half_w':>9}  {'ratio':>8}  verdict")
-    for v in verdicts:
-        if v["ratio"] is None:
-            # Not FAIL. The change is no larger than its own half-width, so there
-            # is nothing to resolve -- which for the `random` explainer is the
-            # control behaving as a control, not a result failing a bar.
-            ratio, verdict = "n/a", "no change"
-        else:
-            ratio, verdict = f"{v['ratio']:.3f}", "PASS" if v["passes"] else "FAIL"
-        print(f"{str(v.get('imputation')):<15} {v['explainer']:<22} "
-              f"{v['shift_family']:<16} {v['change']:>+10.5f}  "
-              f"{v['half_width']:>9.5f}  {ratio:>8}  {verdict}")
+    failure_branch = (
+        "Per the pre-registered failure branch, a failing gate means changing "
+        "the faithfulness metric or pivoting to a measurement-validity paper. "
+        "It does not mean raising n_eval_images: the half-width falls as "
+        "1/sqrt(n), so passing by that route costs 100x the compute for a 10x "
+        "narrowing and is a data-dependent protocol change besides."
+    )
 
-    decided = [v for v in verdicts if v["ratio"] is not None]
-    passed = [v for v in decided if v["passes"]]
-    print()
-    if not decided:
-        print("GATE UNDECIDABLE: no clean-to-severe change exceeds its half-width.")
-    else:
-        print(f"GATE: {len(passed)}/{len(decided)} resolvable pairs pass.")
-    if len(passed) != len(decided) or not decided:
-        print(
-            "Per the pre-registered failure branch, a failing gate means changing "
-            "the faithfulness metric or pivoting to a measurement-validity paper. "
-            "It does not mean raising n_eval_images: the half-width falls as "
-            "1/sqrt(n), so passing by that route costs 100x the compute for a 10x "
-            "narrowing and is a data-dependent protocol change besides."
+    _print_gate_table(
+        gate_verdicts(faith_rows),
+        name="RAW",
+        heading=[
+            f"P3 GATE (RAW)   half-width < {GATE_RATIO:.0%} of the clean-to-"
+            f"severity-{GATE_SEVERITY} change",
+            "                on `faithfulness`: the explainer against a pixel-iid",
+            "                control. The validity run showed that quantity tracks",
+            "                mask geometry -- a model-free blob scores well below",
+            "                zero on it -- so this table is reported, not read.",
+        ],
+        column="explainer",
+        footnote=failure_branch,
+    )
+
+    if matched:
+        # The same bar on the matched column. Printed second and labelled
+        # GEOMETRY-MATCHED because the two tables answer the same question about
+        # two different quantities, and only one of the quantities survived the
+        # validity run -- a reader who confuses them reads the metric decision
+        # off a confounded number.
+        _print_gate_table(
+            gate_verdicts(matched, value_key="matched"),
+            name="GEOMETRY-MATCHED",
+            heading=[
+                "P3 GATE (GEOMETRY-MATCHED)",
+                f"   half-width < {GATE_RATIO:.0%} of the clean-to-severity-"
+                f"{GATE_SEVERITY} change in `matched`:",
+                "   the explainer minus a control of its OWN mask geometry.",
+                "   THIS is the gate the 1000-vs-2000 decision reads. The raw",
+                "   gate above gates a quantity the validity run showed",
+                "   confounded, so neither its passes nor its failures bear on",
+                "   that decision.",
+            ],
+            column="explainer vs reference",
+            footnote=failure_branch,
         )
-    print("=" * 72)
 
 
 def main(argv=None) -> int:

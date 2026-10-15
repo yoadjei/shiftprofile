@@ -69,7 +69,8 @@ def _cells():
     ]
 
 
-def _seed_cache(tmp_path, *, faithfulness_by_severity=None, skip=()):
+def _seed_cache(tmp_path, *, faithfulness_by_severity=None, skip=(),
+                explainers=EXPLAINERS, gap_by_explainer=None):
     """A cache populated the way the real producers populate it.
 
     Through the producers' own key builders, never a hand-built dict -- seeding
@@ -79,6 +80,10 @@ def _seed_cache(tmp_path, *, faithfulness_by_severity=None, skip=()):
     cache = ArtifactCache(tmp_path / "cache")
     rng = np.random.default_rng(0)
     fractions = np.asarray(REMOVAL_FRACTIONS)
+    # Spread the gap across images so the bootstrap has something to resample.
+    # One value repeated N times gives a half-width of exactly 0, and a gate
+    # read off that cannot tell a resolved change from an unresolved one.
+    jitter = np.linspace(0.8, 1.2, N)[:, None]
 
     for cell in _cells():
         if ("predict", cell.shift_family, cell.severity) in skip:
@@ -87,16 +92,21 @@ def _seed_cache(tmp_path, *, faithfulness_by_severity=None, skip=()):
         cache.put_array(predict_spec(cell, indices=INDICES), PREDICT_VERSION, logits)
 
     for cell in _cells():
-        for explainer in EXPLAINERS:
+        for explainer in explainers:
             if ("curves", cell.shift_family, cell.severity, explainer) in skip:
                 continue
             # A model curve that decays faster than the control gives positive
-            # faithfulness; the gap sets its size.
+            # faithfulness; the gap sets its size. The severity term moves every
+            # explainer together, the explainer term separates them, so a test
+            # can ask for a change under shift and for arms that differ from
+            # each other at once -- which is what a matched pair needs.
             gap = 0.0
             if faithfulness_by_severity is not None:
                 gap = faithfulness_by_severity.get(cell.severity, 0.0)
-            model = np.clip(1.0 - (1.0 + gap) * fractions, 0.0, 1.0)
-            control = np.clip(1.0 - fractions, 0.0, 1.0)
+            if gap_by_explainer is not None:
+                gap += gap_by_explainer.get(explainer, 0.0)
+            model = np.clip(1.0 - (1.0 + gap * jitter) * fractions, 0.0, 1.0)
+            control = np.tile(np.clip(1.0 - fractions, 0.0, 1.0), (N, 1))
             for which, curve in (("model", model), ("random", control)):
                 cache.put_array(
                     curves_spec(
@@ -105,7 +115,7 @@ def _seed_cache(tmp_path, *, faithfulness_by_severity=None, skip=()):
                         explain_options=explain_options_from(CONFIG),
                     ),
                     CURVES_VERSION,
-                    np.tile(curve, (N, 1)).astype(np.float32),
+                    np.broadcast_to(curve, (N, len(fractions))).astype(np.float32),
                 )
     return cache
 
@@ -233,6 +243,184 @@ class TestTheGateStatistic:
         assert v["change"] < 0
         assert v["ratio"] == pytest.approx(0.05)
         assert v["passes"]
+
+    def test_the_default_gate_is_unchanged_by_the_matched_one_arriving(self):
+        """The regression that matters most about `value_key`.
+
+        The raw gate's verdicts are already on record and section 4's decision
+        rule was written against them. An addition that quietly altered one --
+        a field appended to every row, a reordering, a ratio computed from a
+        different column -- would make the recorded count unreproducible from
+        this script while every existing assertion here still passed. So the
+        whole record is pinned, keys included, not just the fields other tests
+        happen to read.
+        """
+        rows = self._rows(0.20, 0.10, half_width=0.005)
+        verdicts = gate_verdicts(rows)
+        assert verdicts == gate_verdicts(rows, value_key="faithfulness")
+        assert verdicts == [{
+            "explainer": "ig",
+            "imputation": "mean",
+            "shift_family": "fog",
+            "clean": 0.20,
+            "severe": 0.10,
+            "change": 0.10 - 0.20,
+            "half_width": 0.005,
+            "ratio": 0.005 / abs(0.10 - 0.20),
+            "passes": True,
+        }]
+
+
+class TestTheMatchedGate:
+    """The same bar applied to the quantity the validity run left standing.
+
+    `faithfulness` is the explainer scored against a pixel-iid control, and
+    `random_lowres_2` -- which never sees the model, the image or the label --
+    scores far below zero on it, monotonically in blob size under every
+    imputation scheme. Gating that column makes its verdict uninterpretable in
+    both directions: a pass would be a well-resolved artifact. The matched
+    column is the explainer minus a control of its own mask geometry, which is
+    what section 4's 1000-vs-2000 decision has to be read off.
+    """
+
+    FAMILIES = ("defocus_blur", "fog")
+
+    def _row(self, explainer, reference, value, *, family, severity,
+             half_width=0.005, imputation="mean"):
+        """A row shaped exactly as `matched_rows` returns one.
+
+        Deliberately carries no `faithfulness` key: if the gate ever reads the
+        raw column when asked for the matched one, this raises rather than
+        quietly gating the wrong quantity.
+        """
+        return {
+            "explainer": explainer, "reference": reference, "kind": "geometry",
+            "imputation": imputation, "shift_family": family,
+            "severity": severity, "matched": value, "half_width": half_width,
+            "low": value - half_width, "high": value + half_width,
+            "beats_control": value - half_width > 0,
+        }
+
+    def _pair_rows(self, explainer, reference, clean, severe, **kwargs):
+        rows = [self._row(explainer, reference, clean,
+                          family=CLEAN, severity=0, **kwargs)]
+        rows += [self._row(explainer, reference, severe,
+                           family=family, severity=5, **kwargs)
+                 for family in self.FAMILIES]
+        return rows
+
+    def test_it_gates_the_matched_column_not_the_raw_one(self):
+        """A verdict per (explainer, reference, family), computed from
+        `matched`. The rows carry no `faithfulness` at all, so a gate still
+        reading the raw column cannot pass this by coincidence."""
+        rows = self._pair_rows("grad_cam", "random_lowres_4", 0.20, 0.10)
+
+        verdicts = gate_verdicts(rows, value_key="matched")
+
+        assert [(v["explainer"], v["reference"], v["shift_family"])
+                for v in verdicts] == [
+            ("grad_cam", "random_lowres_4", "defocus_blur"),
+            ("grad_cam", "random_lowres_4", "fog"),
+        ]
+        assert all(v["clean"] == 0.20 and v["severe"] == 0.10 for v in verdicts)
+        assert all(v["change"] == pytest.approx(-0.10) for v in verdicts)
+        assert all(v["ratio"] == pytest.approx(0.05) and v["passes"]
+                   for v in verdicts)
+
+    def test_one_explainer_with_two_references_gives_two_rows(self):
+        """The collision this design exists to avoid.
+
+        `grad_cam` is matched against `grad_cam_rolled` for alignment AND
+        against `random_lowres_4` for geometry. Keyed on the explainer alone,
+        the second row overwrites the first in the lookup and the gate reports
+        one arm where there are two -- silently, with a plausible number, and
+        with no way to tell from the table which comparison survived.
+        """
+        rows = (self._pair_rows("grad_cam", "grad_cam_rolled", 0.20, 0.10)
+                + self._pair_rows("grad_cam", "random_lowres_4", 0.40, 0.10))
+
+        verdicts = [v for v in gate_verdicts(rows, value_key="matched")
+                    if v["shift_family"] == "fog"]
+
+        assert len(verdicts) == 2
+        assert {v["reference"] for v in verdicts} == {
+            "grad_cam_rolled", "random_lowres_4"
+        }
+        by_reference = {v["reference"]: v["change"] for v in verdicts}
+        assert by_reference["grad_cam_rolled"] == pytest.approx(-0.10)
+        assert by_reference["random_lowres_4"] == pytest.approx(-0.30)
+
+    def test_a_matched_change_under_its_half_width_is_no_change(self):
+        """The same distinction the raw gate draws, kept on the new column.
+
+        "The effect is absent" and "our resolution is too coarse" imply
+        different pre-registered responses, and an exact-zero test once let the
+        random control through with ratios of 67.9 printed as FAIL.
+        """
+        rows = self._pair_rows("grad_cam", "random_lowres_4", 0.0, 0.00001,
+                               half_width=0.00012)
+
+        verdicts = gate_verdicts(rows, value_key="matched")
+
+        assert all(v["change"] != 0 for v in verdicts)
+        assert all(v["ratio"] is None for v in verdicts)
+        assert not any(v["passes"] for v in verdicts)
+
+    def test_a_complete_grid_yields_one_row_per_pair_and_family(self):
+        """Nothing dropped and nothing doubled.
+
+        A partial table is the failure this whole script replaced, and here it
+        would arrive as a quietly short gate count feeding a pre-registered
+        decision.
+        """
+        pairs = [
+            ("grad_cam", "grad_cam_rolled"),
+            ("grad_cam", "random_lowres_4"),
+            ("integrated_gradients", "integrated_gradients_rolled"),
+        ]
+        rows = []
+        for i, (explainer, reference) in enumerate(pairs):
+            rows += self._pair_rows(explainer, reference, 0.20, 0.10 - 0.01 * i)
+
+        verdicts = gate_verdicts(rows, value_key="matched")
+
+        assert len(verdicts) == len(pairs) * len(self.FAMILIES)
+        assert len({(v["explainer"], v["reference"], v["shift_family"])
+                    for v in verdicts}) == len(verdicts)
+
+    def test_it_gates_rows_the_report_actually_produces(self, tmp_path):
+        """End to end on real row shapes, from a cache seeded by the producers'
+        own key builders: a `matched_rows` output the gate cannot read would
+        pass every hand-built-row test above and fail on the only cache that
+        matters."""
+        explainers = ["grad_cam", "grad_cam_rolled", "random_lowres_4"]
+        cache = _seed_cache(
+            tmp_path,
+            explainers=explainers,
+            faithfulness_by_severity={0: 0.10, 1: 0.05, 5: 0.0},
+            gap_by_explainer={"grad_cam": 0.30, "grad_cam_rolled": 0.20,
+                              "random_lowres_4": 0.25},
+        )
+        faith = faithfulness_rows(
+            _cells(), cache, explainers=explainers, indices=INDICES,
+            imputations=["mean"], explain_options=explain_options_from(CONFIG),
+            n_resamples=200,
+        )
+
+        matched = matched_rows(faith, n_resamples=200)
+        verdicts = gate_verdicts(matched, value_key="matched")
+
+        assert {(v["explainer"], v["reference"]) for v in verdicts} == {
+            ("grad_cam", "grad_cam_rolled"),
+            ("grad_cam", "random_lowres_4"),
+        }
+        assert all(v["half_width"] > 0 for v in verdicts)
+        assert len({v["clean"] for v in verdicts}) == 2, (
+            "both references gated the same level, so one row is the other's "
+            "copy and the collision survived"
+        )
+        # And the raw gate over the same cells still names arms, not pairs.
+        assert all("reference" not in v for v in gate_verdicts(faith))
 
 
 class TestBeatsRandom:
@@ -526,6 +714,51 @@ class TestThePrintedReport:
         )
         assert "no change" in line
         assert "FAIL" not in line
+
+    def _rows_with_matched_arms(self):
+        """The same report, over a run that has the geometry-matched arms."""
+        cal, faith = [], []
+        for fam, sev in [(CLEAN, 0), ("fog", 5)]:
+            cal.append(dict(
+                model_id="resnet18", seed=0, shift_family=fam, severity=sev,
+                brier=0.1, ece_equal_mass=0.05, ece_debiased=0.04,
+                aurc=0.08, accuracy=0.9,
+            ))
+            # Each arm gets its own severity slope and its own spread, so the
+            # matched difference both moves under shift and has a half-width:
+            # arms that fell together would give a change of exactly zero and
+            # every row would print "no change" whatever the gate did.
+            for ex, base, slope, spread in (("grad_cam", 0.30, 0.010, 1.0),
+                                            ("grad_cam_rolled", 0.20, 0.002, 0.5),
+                                            ("random_lowres_4", 0.25, 0.004, 0.8)):
+                per_image = (base - sev * slope
+                             + np.linspace(-0.02, 0.02, 8) * spread)
+                faith.append(dict(
+                    model_id="resnet18", seed=0, shift_family=fam, severity=sev,
+                    explainer=ex, imputation="mean",
+                    faithfulness=float(per_image.mean()), half_width=0.003,
+                    low=float(per_image.mean()) - 0.003,
+                    high=float(per_image.mean()) + 0.003, n=8,
+                    per_image=per_image,
+                ))
+        return cal, faith
+
+    def test_both_gates_print_and_cannot_be_read_for_each_other(self, capsys):
+        """Two tables apply the same bar to two different quantities, and only
+        one of the quantities survived the validity run. Unlabelled, a reader
+        takes the metric decision off whichever table they reach first. The
+        matched rows also have to name their reference: `grad_cam` is gated
+        against two of them, so the explainer alone identifies nothing."""
+        cal, faith = self._rows_with_matched_arms()
+        pilot_report._print_report(
+            {"n_eval_images": 1000, "explainers": ["grad_cam"]}, cal, faith,
+        )
+        out = capsys.readouterr().out
+
+        assert out.index("P3 GATE (RAW)") < out.index("P3 GATE (GEOMETRY-MATCHED)")
+        assert "grad_cam vs random_lowres_4" in out
+        assert "grad_cam vs grad_cam_rolled" in out
+        assert "GATE (RAW):" in out and "GATE (GEOMETRY-MATCHED):" in out
 
     def test_a_failing_gate_names_the_pre_registered_response(self, capsys):
         """It must not read as "collect more images": the half-width falls as
