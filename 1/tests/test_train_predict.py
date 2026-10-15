@@ -14,6 +14,7 @@ import torch.nn as nn
 from pathlib import Path
 
 from shiftprofile.train import train_spec, train_model, load_or_train, TRAIN_VERSION
+from shiftprofile.models.vision import uses_augmix
 from shiftprofile.data import fixed_eval_indices
 from shiftprofile.predict import (
     PREDICT_VERSION,
@@ -73,19 +74,119 @@ def get_cifar_mocks():
 # Tests for train.py
 # ============================================================================
 
+HP = {"epochs": 50, "batch_size": 256, "lr": 0.1}
+
+
 class TestTrainSpec:
     def test_train_spec_returns_dict(self):
-        spec = train_spec("resnet18", seed=42)
+        spec = train_spec("resnet18", seed=42, **HP)
         assert isinstance(spec, dict)
         assert spec["model_id"] == "resnet18"
         assert spec["seed"] == 42
 
     def test_train_spec_includes_model_and_seed(self):
-        spec = train_spec("vit_tiny", seed=123)
+        spec = train_spec("vit_tiny", seed=123, **HP)
         assert "model_id" in spec
         assert "seed" in spec
         assert spec["model_id"] == "vit_tiny"
         assert spec["seed"] == 123
+
+    def test_train_spec_names_every_hyperparameter_that_changes_the_weights(self):
+        """The eighth instance of the project's recurring cache-key defect.
+
+        Through `train-v1` the key was `{model_id, seed}`, while `fill.main`
+        read `epochs` and `batch_size` out of the config and passed them to
+        training. Editing either in a config produced different weights filed
+        under an identical key, so the run would be served the old checkpoint
+        and report it as the new one.
+        """
+        assert set(train_spec("resnet18", seed=0, **HP)) == {
+            "model_id",
+            "seed",
+            "epochs",
+            "batch_size",
+            "lr",
+        }
+
+    @pytest.mark.parametrize(
+        "changed",
+        [{"epochs": 10}, {"batch_size": 128}, {"lr": 0.05}],
+        ids=["epochs", "batch_size", "lr"],
+    )
+    def test_train_spec_forks_when_a_hyperparameter_changes(self, changed):
+        base = train_spec("resnet18", seed=0, **HP)
+        other = train_spec("resnet18", seed=0, **{**HP, **changed})
+        assert base != other, (
+            f"changing {list(changed)[0]} produces different weights under the "
+            "same key, so the cache would serve the wrong checkpoint"
+        )
+
+    def test_train_spec_requires_the_hyperparameters(self):
+        """A default here would let a caller that forgot to pass `epochs` file a
+        10-epoch checkpoint under a key asserting 50 -- the same defect, moved."""
+        with pytest.raises(TypeError):
+            train_spec("resnet18", seed=0)
+
+    def test_train_spec_does_not_name_augmix(self):
+        """`augmix` is a function of `model_id`, so naming it would admit a key
+        that contradicts itself (`resnet18` with augmix=True)."""
+        assert "augmix" not in train_spec("resnet18_augmix", seed=0, **HP)
+
+
+class TestAugmixIsDerivedFromTheModelId:
+    """`resnet18_augmix` used to train identically to `resnet18`.
+
+    `train_model` took `augmix: bool = False` and no caller anywhere in the
+    project ever set it, so a pre-registered arm whose entire content is
+    "the same network trained with AugMix" trained without AugMix and differed
+    from its baseline only in its cache key. Secondary hypothesis S3 would have
+    been a comparison of a model against itself.
+    """
+
+    def test_augmix_model_id_uses_augmix(self):
+        assert uses_augmix("resnet18_augmix") is True
+
+    def test_plain_model_ids_do_not(self):
+        assert uses_augmix("resnet18") is False
+        assert uses_augmix("vit_tiny") is False
+
+    def test_unknown_id_raises_rather_than_returning_false(self):
+        """A typo in a config must not quietly train the non-AugMix variant."""
+        with pytest.raises(ValueError, match="unknown model"):
+            uses_augmix("resnet18_augmixx")
+
+    def test_train_model_no_longer_accepts_an_augmix_keyword(self):
+        """Refused, not aliased -- the treatment `zero` and `black` got.
+
+        A caller passing `augmix=True` alongside `model_id="resnet18"` is
+        asserting something the id denies. Accepting it is how the two drifted
+        apart in the first place.
+        """
+        with pytest.raises(TypeError):
+            train_model("resnet18", 0, "/nonexistent", augmix=True)
+
+    def test_the_two_ids_request_different_training_data(self, tmp_path):
+        """The end-to-end property: the AugMix arm must actually see AugMix.
+
+        Asserted at the `load_cifar10_train` seam rather than on weights,
+        because training a real net for this would cost minutes per run.
+        """
+        from unittest.mock import patch
+
+        seen = []
+        mock_train, mock_test = get_cifar_mocks()
+
+        def record(root, augmix=False):
+            seen.append(augmix)
+            return mock_train(root)
+
+        with patch("shiftprofile.train.load_cifar10_train", record), patch(
+            "shiftprofile.train.load_cifar10_test", mock_test
+        ):
+            train_model("resnet18", 0, tmp_path, epochs=1, batch_size=8)
+            train_model("resnet18_augmix", 0, tmp_path, epochs=1, batch_size=8)
+
+        assert seen == [False, True]
 
 
 class TestTrainModel:
@@ -338,7 +439,9 @@ class TestLoadOrTrain:
 
         mock_train, mock_test = get_cifar_mocks()
         cache = ArtifactCache(tmp_path)
-        spec = train_spec("resnet18", seed=42)
+        # The same hyperparameters load_or_train is called with below. They are
+        # in the key now, so a spec built with the defaults would not match.
+        spec = train_spec("resnet18", seed=42, epochs=1, batch_size=32, lr=0.1)
 
         # Before training, checkpoint should not be in cache
         assert not cache.has(spec, TRAIN_VERSION, kind="record")

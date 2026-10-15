@@ -77,6 +77,13 @@ def vit_tiny(
     return model
 
 
+BUILDERS = {
+    "resnet18": resnet18_cifar,
+    "resnet18_augmix": resnet18_cifar,  # Same architecture; augmentation is training-time only
+    "vit_tiny": vit_tiny,
+}
+
+
 def build_model(model_id: str, **kwargs) -> nn.Module:
     """Dispatch to a named model by ID.
 
@@ -90,19 +97,46 @@ def build_model(model_id: str, **kwargs) -> nn.Module:
     Raises:
         ValueError: If model_id is unknown.
     """
-    builders = {
-        "resnet18": resnet18_cifar,
-        "resnet18_augmix": resnet18_cifar,  # Same architecture; augmentation is training-time only
-        "vit_tiny": vit_tiny,
-    }
-
-    if model_id not in builders:
-        available = ", ".join(sorted(builders.keys()))
+    if model_id not in BUILDERS:
+        available = ", ".join(sorted(BUILDERS))
         raise ValueError(
             f"unknown model {model_id!r}. Available: {available}"
         )
 
-    return builders[model_id](**kwargs)
+    return BUILDERS[model_id](**kwargs)
+
+
+# The model ids whose only difference from their base architecture is AugMix at
+# training time. `build_model` maps `resnet18_augmix` to the same constructor as
+# `resnet18`, so the id is the *only* thing that distinguishes them, and this set
+# is where that meaning lives.
+AUGMIX_MODELS = frozenset({"resnet18_augmix"})
+
+
+def uses_augmix(model_id: str) -> bool:
+    """Whether this model id means "trained with AugMix".
+
+    Single source of truth, because the alternative was a free `augmix` flag on
+    `train_model` that nothing ever set. `resnet18_augmix` therefore trained
+    identically to `resnet18`, and the two checkpoints differed only in their
+    cache key -- a pre-registered arm that silently measured nothing. A flag that
+    can disagree with the id it is paired with will eventually disagree with it.
+
+    Args:
+        model_id: A registered model name.
+
+    Returns:
+        True if training this id applies AugMix augmentation.
+
+    Raises:
+        ValueError: If model_id is unknown. Returning False for an unrecognised
+            id would make a typo in a config silently train the wrong thing.
+    """
+    if model_id not in BUILDERS:
+        raise ValueError(
+            f"unknown model {model_id!r}. Available: {', '.join(sorted(BUILDERS))}"
+        )
+    return model_id in AUGMIX_MODELS
 
 
 def gradcam_target_layer(model: nn.Module) -> nn.Module:

@@ -545,7 +545,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     from .curves import curves_cell
     from .explain import explain_cell
     from .predict import predict_cell
-    from .train import load_or_train
+    from .train import (
+        DEFAULT_BATCH_SIZE,
+        DEFAULT_EPOCHS,
+        DEFAULT_LR,
+        load_or_train,
+    )
 
     # One trained model per (model_id, seed), held for the life of the process.
     # Every stage of every shift cell sharing a model and seed needs the same
@@ -583,8 +588,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 args.data_root,
                 cache,
                 device=device,
-                epochs=config.get("epochs", 50),
-                batch_size=config.get("batch_size", 256),
+                # Defaults come from train.py rather than being repeated here.
+                # Both numbers are in the training cache key, so a fallback that
+                # drifted from the real default would key a checkpoint on
+                # hyperparameters it was not trained with.
+                epochs=config.get("epochs", DEFAULT_EPOCHS),
+                batch_size=config.get("batch_size", DEFAULT_BATCH_SIZE),
+                lr=config.get("lr", DEFAULT_LR),
                 progress=training_progress,
             )
             models[key] = model
