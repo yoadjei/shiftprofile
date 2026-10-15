@@ -1,0 +1,9 @@
+# This repo root is a general preprints folder. Only `1/` (shiftprofile) is
+# tracked here; the sibling directories are unrelated research projects that
+# happen to share the working directory.
+#
+# `1/.gitignore` already names them, but its anchored patterns resolve relative
+# to `1/`, so after the project moved under `1/` they meant `1/2/` and `1/3/`
+# and stopped guarding anything. The guard belongs at the root.
+/2/
+/3/
