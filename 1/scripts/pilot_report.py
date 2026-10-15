@@ -46,6 +46,7 @@ from shiftprofile.data import (  # noqa: E402
     load_cifar10_test,
     resolve_cifar10_root,
 )
+from shiftprofile.fill import restrict_grid  # noqa: E402
 from shiftprofile.explain import (  # noqa: E402
     LOWRES_PREFIX,
     ROLLED_SUFFIX,
@@ -716,9 +717,24 @@ def main(argv=None) -> int:
              "'mean' for every explainer, so comparing schemes is how a real "
              "signal is told from an artefact of the masking.",
     )
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=None,
+        help="Report only these seeds. Must be a subset of the config's. "
+             "Mirrors run_fill.py, so a grid split across sessions is "
+             "reported one slice at a time without editing the config.",
+    )
+    parser.add_argument(
+        "--models", nargs="+", default=None,
+        help="Report only these model ids. Must be a subset of the config's.",
+    )
     args = parser.parse_args(argv)
 
     config = yaml.safe_load(args.config.read_text())
+    # Narrowed the same way and by the same function the fill uses, so a
+    # report cannot disagree with the run it is reporting on. Without it,
+    # a cache holding two seeds makes every report raise once the config
+    # lists both -- `require_one_model_and_seed` refuses to pool them.
+    config = restrict_grid(config, seeds=args.seeds, models=args.models)
     imputations = args.imputation or imputations_from(config)
 
     roots = args.cache_read or [

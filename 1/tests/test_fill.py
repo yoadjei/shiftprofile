@@ -1156,3 +1156,156 @@ class TestTrainingRecipeGuard:
         assert starts, "no run_start was recorded"
         # The config sets epochs 1 and batch_size 8; lr is defaulted.
         assert starts[-1]["training"] == {"epochs": 1, "batch_size": 8, "lr": 0.1}
+
+
+class TestRestrictGrid:
+    """Splitting a grid across sessions without editing the config.
+
+    A 12-hour preemptible session does not hold the whole grid. Editing the
+    config inside the session leaves the manifest naming a path whose contents
+    no longer match what ran, and the committed file describing no actual run.
+    """
+
+    CONFIG = {"models": ["resnet18", "resnet18_augmix", "vit_tiny"],
+              "seeds": [0, 1, 2, 3, 4], "track": "vision"}
+
+    def test_no_restriction_is_the_identity(self):
+        from shiftprofile.fill import restrict_grid
+
+        assert restrict_grid(self.CONFIG) == self.CONFIG
+
+    def test_seeds_narrow(self):
+        from shiftprofile.fill import restrict_grid
+
+        assert restrict_grid(self.CONFIG, seeds=[1])["seeds"] == [1]
+
+    def test_models_narrow(self):
+        from shiftprofile.fill import restrict_grid
+
+        out = restrict_grid(self.CONFIG, models=["vit_tiny"])
+        assert out["models"] == ["vit_tiny"]
+        assert out["seeds"] == [0, 1, 2, 3, 4], "the other axis is untouched"
+
+    def test_the_input_config_is_not_mutated(self):
+        from shiftprofile.fill import restrict_grid
+
+        original = dict(self.CONFIG)
+        restrict_grid(self.CONFIG, seeds=[2], models=["resnet18"])
+        assert self.CONFIG == original
+
+    def test_order_follows_the_config_not_the_command_line(self):
+        """Two sessions naming the same subset differently must enumerate
+        cells identically, or their cache keys diverge for no reason."""
+        from shiftprofile.fill import restrict_grid
+
+        a = restrict_grid(self.CONFIG, seeds=[2, 0])["seeds"]
+        b = restrict_grid(self.CONFIG, seeds=[0, 2])["seeds"]
+        assert a == b == [0, 2]
+
+    @pytest.mark.parametrize(
+        "kwargs, needle",
+        [({"seeds": [7]}, "--seeds"), ({"models": ["resnet50"]}, "--models")],
+        ids=["seed", "model"],
+    )
+    def test_a_value_absent_from_the_config_is_refused(self, kwargs, needle):
+        """`--seeds 1` against a config listing [0] is a typo every time, and a
+        run that quietly does nothing looks like a run that found everything
+        cached."""
+        from shiftprofile.fill import restrict_grid
+
+        with pytest.raises(ValueError, match=needle):
+            restrict_grid(self.CONFIG, **kwargs)
+
+    def _config(self, tmp_path):
+        import yaml
+
+        cfg = {
+            "name": "restrict_test", "track": "vision",
+            "models": ["resnet18"], "seeds": [0, 1],
+            "shift_families": ["fog"], "severities": [1],
+            "explainers": ["random"], "imputation": "mean",
+            "n_eval_images": 8, "epochs": 1, "batch_size": 8,
+        }
+        path = tmp_path / "restrict_test.yaml"
+        path.write_text(yaml.safe_dump(cfg))
+        return path
+
+    def test_the_cli_actually_applies_the_restriction(self, tmp_path, monkeypatch):
+        """The seam. `restrict_grid` passing its own tests says nothing about
+        whether `main` calls it — the L4 lesson, and the reason a whole vision
+        pipeline once passed 254 tests while its entry point was broken."""
+        import numpy as np
+        from shiftprofile.fill import main
+
+        seen = []
+        monkeypatch.setattr(
+            "shiftprofile.train.load_or_train", lambda *a, **kw: (object(), {})
+        )
+
+        def record(cell, model, clean_root, corrupt_root, cache, **kw):
+            seen.append(cell.seed)
+            return np.zeros((8, 10), np.float32)
+
+        monkeypatch.setattr("shiftprofile.predict.predict_cell", record)
+
+        rc = main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(tmp_path / "cache"),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu", "--stages", "predict",
+            "--seeds", "1",
+        ])
+
+        assert rc == 0
+        assert seen, "no cell reached the predict stage"
+        assert set(seen) == {1}, f"seed 0 was not excluded: saw seeds {sorted(set(seen))}"
+
+    def test_the_cli_records_what_it_ran_in_the_manifest(self, tmp_path, monkeypatch):
+        """A config path stops identifying a run once the grid is split."""
+        import json
+
+        import numpy as np
+        from shiftprofile.fill import main
+
+        monkeypatch.setattr(
+            "shiftprofile.train.load_or_train", lambda *a, **kw: (object(), {})
+        )
+        monkeypatch.setattr(
+            "shiftprofile.predict.predict_cell",
+            lambda cell, model, cr, xr, cache, **kw: np.zeros((8, 10), np.float32),
+        )
+
+        cache = tmp_path / "cache"
+        main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(cache),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu", "--stages", "predict",
+            "--seeds", "1",
+        ])
+
+        start = [
+            json.loads(ln)
+            for ln in (cache / "run_manifest.jsonl").read_text().splitlines()
+            if ln.strip() and json.loads(ln).get("event") == "run_start"
+        ][-1]
+        assert start["seeds"] == [1], "the manifest records the config's seeds, not the run's"
+        assert start["models"] == ["resnet18"]
+
+    def test_the_cli_refuses_a_seed_the_config_does_not_have(self, tmp_path, capsys):
+        from shiftprofile.fill import main
+
+        with pytest.raises(ValueError, match="--seeds"):
+            main([
+                "--config", str(self._config(tmp_path)),
+                "--budget-minutes", "5",
+                "--cache-write", str(tmp_path / "cache"),
+                "--data-root", str(tmp_path / "data"),
+                "--corrupt-root", str(tmp_path / "corrupt"),
+                "--device", "cpu", "--stages", "predict",
+                "--seeds", "9",
+            ])

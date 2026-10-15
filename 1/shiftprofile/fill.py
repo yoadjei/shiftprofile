@@ -124,6 +124,49 @@ class RunManifest:
         return recipe
 
 
+def restrict_grid(config: dict, *, seeds=None, models=None) -> dict:
+    """A copy of `config` narrowed to these seeds and models.
+
+    A 12-hour preemptible session does not hold the whole grid, so a run is
+    split along the axes `enumerate_cells` builds from. The alternative in use
+    until now was editing the config inside the session, which leaves the
+    manifest naming a config path whose contents no longer match what ran, and
+    the committed file no longer describing any actual run.
+
+    A value not in the config is refused rather than silently producing an
+    empty grid. `--seeds 1` against a config listing `[0]` is a typo every time,
+    and a run that quietly does nothing looks exactly like a run that found
+    everything cached.
+
+    Args:
+        config: Parsed config. Not mutated.
+        seeds: Seeds to keep, or None to keep all.
+        models: Model ids to keep, or None to keep all.
+
+    Returns:
+        A new config dict.
+
+    Raises:
+        ValueError: If any requested value is absent from the config.
+    """
+    out = dict(config)
+    for key, requested in (("seeds", seeds), ("models", models)):
+        if requested is None:
+            continue
+        available = list(config[key])
+        missing = [v for v in requested if v not in available]
+        if missing:
+            raise ValueError(
+                f"--{key} {missing} not in the config's {key} {available}. "
+                f"Restricting the grid can only narrow it; it cannot add a "
+                f"{key[:-1]} the config does not pre-register."
+            )
+        # Config order, not command-line order, so two sessions naming the same
+        # subset in different orders enumerate cells identically.
+        out[key] = [v for v in available if v in requested]
+    return out
+
+
 def check_training_recipe(
     previous: Optional[dict[str, Any]], current: dict[str, Any]
 ) -> Optional[str]:
@@ -615,10 +658,25 @@ def main(argv: Optional[list[str]] = None) -> int:
              "run_manifest.jsonl inside the write cache, so it is saved "
              "along with the artifacts.",
     )
+    # A 12-hour preemptible session cannot hold the whole grid, so a run is
+    # split along the axes the grid is built from. Doing that by editing the
+    # config in the session means the committed config no longer describes the
+    # run, and the manifest records a config path whose contents have changed.
+    # These narrow the grid without touching the file, and are recorded below.
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=None,
+        help="Run only these seeds. Must be a subset of the config's. "
+             "Splits a grid across sessions without editing the config.",
+    )
+    parser.add_argument(
+        "--models", nargs="+", default=None,
+        help="Run only these model ids. Must be a subset of the config's.",
+    )
 
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
+    config = restrict_grid(config, seeds=args.seeds, models=args.models)
     cache = ArtifactCache(args.cache_write, read_roots=args.cache_read)
     device = _resolve_device(args.device)
 
@@ -704,6 +762,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
 
     print(f"config      {args.config}")
+    # Printed unconditionally, not only when narrowed: a log that names the
+    # seeds only sometimes leaves the reader unable to tell a restricted run
+    # from a full one by looking.
+    print(f"models      {', '.join(map(str, config['models']))}")
+    print(f"seeds       {', '.join(map(str, config['seeds']))}")
     print(f"device      {device}")
     print(f"budget      {args.budget_minutes:.0f} min")
     print(f"cache write {args.cache_write}")
@@ -739,6 +802,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             # place it is recorded. `check_training_recipe` reads it back.
             training=training_recipe,
             config=str(args.config),
+            # What this session actually ran, after --seeds/--models. The
+            # config path alone stops identifying the run once a grid is split
+            # across sessions, and these are the axes it is split on.
+            seeds=list(config["seeds"]),
+            models=list(config["models"]),
             device=device,
             budget_minutes=args.budget_minutes,
             stages=list(args.stages),

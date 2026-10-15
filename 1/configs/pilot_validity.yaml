@@ -63,8 +63,16 @@ name: pilot_validity
 track: vision
 models:
 - resnet18
+# Seeds 1 and 2 are P3b.4's pre-registered replication. They are listed here so
+# `--seeds <n>` narrows the grid for one session instead of being refused, and
+# so the committed config describes every session rather than only the first.
+# Each is run and REPORTED separately: `require_one_model_and_seed` refuses to
+# pool them, because pooling seeds into a within-seed bootstrap understates the
+# half-width the P3 gate is read on.
 seeds:
 - 0
+- 1
+- 2
 shift_families:
 - gaussian_noise
 - defocus_blur

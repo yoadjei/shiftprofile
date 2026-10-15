@@ -57,6 +57,7 @@ import yaml  # noqa: E402
 
 from shiftprofile.cache import ArtifactCache  # noqa: E402
 from shiftprofile.cells import enumerate_cells  # noqa: E402
+from shiftprofile.fill import restrict_grid  # noqa: E402
 from shiftprofile.curves import (  # noqa: E402
     CURVES_VERSION,
     REMOVAL_FRACTIONS,
@@ -407,9 +408,20 @@ def main(argv=None) -> int:
         help="Scheme to report; repeatable. Defaults to mean and blur, which "
              "are the two the sign of degradation reverses between.",
     )
+    parser.add_argument(
+        "--seeds", type=int, nargs="+", default=None,
+        help="Report only these seeds. Must be a subset of the config's. "
+             "Mirrors run_fill.py, so a grid split across sessions is "
+             "reported one slice at a time without editing the config.",
+    )
+    parser.add_argument(
+        "--models", nargs="+", default=None,
+        help="Report only these model ids. Must be a subset of the config's.",
+    )
     args = parser.parse_args(argv)
 
     config = yaml.safe_load(args.config.read_text())
+    config = restrict_grid(config, seeds=args.seeds, models=args.models)
     explainers = config["explainers"]
     imputations = args.imputation or [
         s for s in ("mean", "blur") if s in config["imputations"]
