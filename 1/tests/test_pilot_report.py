@@ -35,6 +35,7 @@ from pilot_report import (  # noqa: E402
     imputation_from,
     matched_pairs,
     matched_rows,
+    require_one_model_and_seed,
 )
 
 from shiftprofile.cache import ArtifactCache
@@ -778,3 +779,83 @@ class TestThePrintedReport:
         out = capsys.readouterr().out
         assert "FAIL" in out
         assert "does not mean raising n_eval_images" in out
+
+
+class TestTheReportRefusesMoreThanOneSeed:
+    """The report is a single-seed instrument and did not know it.
+
+    `matched_rows` and `gate_verdicts` key on
+    (explainer[, reference], imputation, shift_family, severity). `model_id`
+    and `seed` are in every row `faithfulness_rows` emits and in neither key,
+    so a dict comprehension keeps the last and drops the rest. It has never
+    bitten because the pilot is one model, one seed. P3b.4 adds seeds 1 and 2.
+    """
+
+    def _rows(self, pairs):
+        return [
+            {
+                "model_id": model,
+                "seed": seed,
+                "shift_family": "fog",
+                "severity": 3,
+                "explainer": "grad_cam",
+                "imputation": "mean",
+                "faithfulness": 0.1,
+                "half_width": 0.01,
+                "per_image": np.zeros(4),
+            }
+            for model, seed in pairs
+        ]
+
+    def test_one_model_and_seed_is_allowed(self):
+        require_one_model_and_seed(self._rows([("resnet18", 0)]))
+
+    def test_no_rows_is_allowed(self):
+        """An empty grid is a different failure, raised elsewhere."""
+        require_one_model_and_seed([])
+
+    def test_two_seeds_of_one_model_are_refused(self):
+        with pytest.raises(ValueError, match="span 2 model-seed"):
+            require_one_model_and_seed(self._rows([("resnet18", 0), ("resnet18", 1)]))
+
+    def test_two_models_at_one_seed_are_refused(self):
+        with pytest.raises(ValueError, match="span 2 model-seed"):
+            require_one_model_and_seed(
+                self._rows([("resnet18", 0), ("vit_tiny", 0)])
+            )
+
+    def test_the_refusal_names_the_combinations_and_the_remedy(self):
+        with pytest.raises(ValueError) as excinfo:
+            require_one_model_and_seed(self._rows([("resnet18", 0), ("resnet18", 2)]))
+        message = str(excinfo.value)
+        assert "resnet18/seed 0" in message and "resnet18/seed 2" in message
+        assert "mixed-effects" in message, "the refusal must name the real fix"
+
+    def test_the_silent_drop_this_prevents_is_real(self):
+        """Not a hypothetical. Measured against the collapsing functions.
+
+        Without the guard these rows produce one matched row where three are
+        expected, and nothing anywhere says two were discarded.
+        """
+        rows = []
+        for seed in (0, 1, 2):
+            for explainer in ("grad_cam", "grad_cam_rolled"):
+                rows.append({
+                    "model_id": "resnet18",
+                    "seed": seed,
+                    "shift_family": "fog",
+                    "severity": 3,
+                    "explainer": explainer,
+                    "imputation": "mean",
+                    "faithfulness": 0.1 * seed,
+                    "half_width": 0.01,
+                    "per_image": np.full(8, float(seed)),
+                })
+
+        collapsed = matched_rows(rows, n_resamples=64)
+        assert len(collapsed) == 1, (
+            "if this is no longer 1 the collapse has been fixed properly and "
+            "the guard can be replaced by real multi-seed aggregation"
+        )
+        with pytest.raises(ValueError, match="span 3 model-seed"):
+            require_one_model_and_seed(rows)

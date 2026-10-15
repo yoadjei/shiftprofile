@@ -219,7 +219,51 @@ def faithfulness_rows(cells, cache, *, explainers, indices, imputations,
             f"options. Skipping them is not an option: a partial grid is not the "
             f"pre-registered grid."
         )
+    require_one_model_and_seed(rows)
     return rows
+
+
+def require_one_model_and_seed(rows) -> None:
+    """Refuse rows spanning more than one (model_id, seed). This report is a
+    single-seed instrument and does not yet know it.
+
+    Two separate things break, and neither announces itself.
+
+    `matched_rows` and `gate_verdicts` build their lookups with dict
+    comprehensions keyed on (explainer[, reference], imputation, shift_family,
+    severity). `model_id` and `seed` are in every row and in neither key, so
+    across three seeds the last one silently wins and the table reports one
+    seed's numbers as the result -- 12 faithfulness rows over 3 seeds x 2
+    explainers x 2 cells collapse to 2 matched rows where 6 are expected.
+
+    `geometry_ladder` and the per-severity table do not drop anything; they
+    average, which is worse, because the result looks right. Their bootstrap
+    resamples pooled per-image values as if they were exchangeable. Seeds are
+    not more images, they are a variance component, so pooling them reports a
+    between-seed effect inside a within-seed interval and the half-width comes
+    out too small -- on the gate's own statistic, which is a half-width.
+
+    Aggregating across seeds correctly is the mixed-effects model in
+    preregistration section 6, not something to pick here. P3b.4 adds seeds 1
+    and 2; this refuses until that is decided rather than printing a number
+    whose provenance nobody could reconstruct.
+
+    Raises:
+        ValueError: If the rows span more than one (model_id, seed).
+    """
+    pairs = sorted({(r["model_id"], r["seed"]) for r in rows})
+    if len(pairs) <= 1:
+        return
+    listed = ", ".join(f"{model}/seed {seed}" for model, seed in pairs)
+    raise ValueError(
+        f"these rows span {len(pairs)} model-seed combinations ({listed}), and "
+        f"this report is a single-seed instrument. `matched_rows` and "
+        f"`gate_verdicts` key without model_id and seed, so all but the last "
+        f"would be silently dropped; the tables that average instead would pool "
+        f"seeds into a within-seed bootstrap and report a half-width that is too "
+        f"small. Run one model and seed at a time, or implement the "
+        f"mixed-effects aggregation preregistration section 6 specifies."
+    )
 
 
 def matched_pairs(faith_rows) -> list[tuple[str, str, str]]:
