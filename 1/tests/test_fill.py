@@ -954,3 +954,205 @@ class TestProgressReporter:
     def test_a_nonsense_interval_is_refused(self):
         with pytest.raises(ValueError, match="every"):
             ProgressReporter(every=0)
+
+
+class TestTrainingRecipeGuard:
+    """The training recipe shapes every artifact and is in no key but the
+    checkpoint's.
+
+    `predict`, `explain` and `curves` are keyed on the cell, which names
+    `model_id` and `seed` and nothing about how the model was trained. Fixing
+    the checkpoint's key (train-v2) made a changed `epochs` retrain the model;
+    it did not stop the run reusing logits computed from the previous model's
+    weights, because those keys did not change.
+    """
+
+    RECIPE = {"epochs": 50, "batch_size": 256, "lr": 0.1}
+
+    def _config(self, tmp_path):
+        import yaml
+
+        cfg = {
+            "name": "recipe_guard",
+            "track": "vision",
+            "models": ["resnet18"],
+            "seeds": [0],
+            "shift_families": ["fog"],
+            "severities": [1],
+            "explainers": ["random"],
+            "imputation": "mean",
+            "n_eval_images": 8,
+            "epochs": 1,
+            "batch_size": 8,
+        }
+        path = tmp_path / "recipe_guard.yaml"
+        path.write_text(yaml.safe_dump(cfg))
+        return path
+
+    def test_a_fresh_cache_is_allowed(self):
+        from shiftprofile.fill import check_training_recipe
+
+        assert check_training_recipe(None, self.RECIPE) is None
+
+    def test_the_same_recipe_is_allowed(self):
+        from shiftprofile.fill import check_training_recipe
+
+        assert check_training_recipe(dict(self.RECIPE), self.RECIPE) is None
+
+    @pytest.mark.parametrize(
+        "changed", [{"epochs": 2}, {"batch_size": 64}, {"lr": 0.01}],
+        ids=["epochs", "batch_size", "lr"],
+    )
+    def test_any_changed_hyperparameter_refuses(self, changed):
+        from shiftprofile.fill import check_training_recipe
+
+        message = check_training_recipe({**self.RECIPE, **changed}, self.RECIPE)
+        assert message is not None
+        assert list(changed)[0] in message
+
+    def test_the_refusal_names_both_values(self):
+        """A refusal that does not say what changed makes the user guess."""
+        from shiftprofile.fill import check_training_recipe
+
+        message = check_training_recipe({**self.RECIPE, "epochs": 2}, self.RECIPE)
+        assert "2" in message and "50" in message
+        assert "--cache-write" in message, "the refusal must name the remedy"
+
+    def test_the_smoke_test_sequence_is_caught(self, tmp_path):
+        """The way this actually happens, end to end through the manifest.
+
+        A scratch config with `epochs: 2` run against the shared cache to check
+        the pipeline works -- a normal thing to do on a quota-limited project --
+        followed by the real config.
+        """
+        from shiftprofile.fill import RunManifest, check_training_recipe
+
+        path = tmp_path / "run_manifest.jsonl"
+        smoke = {"epochs": 2, "batch_size": 256, "lr": 0.1}
+        with RunManifest(path) as manifest:
+            manifest.record(event="run_start", training=smoke)
+
+        assert check_training_recipe(
+            RunManifest.previous_training_recipe(path), self.RECIPE
+        ) is not None
+
+    def test_reading_back_takes_the_most_recent_recipe(self, tmp_path):
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "run_manifest.jsonl"
+        with RunManifest(path) as manifest:
+            manifest.record(event="run_start", training={"epochs": 2})
+            manifest.record(event="unit_start", cell="c0")
+            manifest.record(event="run_start", training=dict(self.RECIPE))
+
+        assert RunManifest.previous_training_recipe(path) == self.RECIPE
+
+    def test_a_manifest_with_no_recipe_reads_as_none(self, tmp_path):
+        """Manifests written before train-v2 record no recipe, and an upgrade
+        must not refuse every existing cache."""
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "run_manifest.jsonl"
+        with RunManifest(path) as manifest:
+            manifest.record(event="run_start", config="pilot.yaml")
+
+        assert RunManifest.previous_training_recipe(path) is None
+
+    def test_a_missing_manifest_reads_as_none(self, tmp_path):
+        from shiftprofile.fill import RunManifest
+
+        assert RunManifest.previous_training_recipe(tmp_path / "absent.jsonl") is None
+
+    def test_a_truncated_final_line_is_skipped_not_raised(self, tmp_path):
+        """The one line a fsynced append-only manifest can break is the one a
+        killed session was mid-write on. That is a thing to tolerate."""
+        from shiftprofile.fill import RunManifest
+
+        path = tmp_path / "run_manifest.jsonl"
+        with RunManifest(path) as manifest:
+            manifest.record(event="run_start", training=dict(self.RECIPE))
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write('{"event": "unit_start", "cel')
+
+        assert RunManifest.previous_training_recipe(path) == self.RECIPE
+
+    def test_the_cli_refuses_a_cache_built_with_a_different_recipe(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The seam, not the predicate.
+
+        `check_training_recipe` has its own tests. This one asserts `main`
+        actually calls it, before anything runs -- the L4 lesson: a suite whose
+        every test stubs the boundary proves the units work and says nothing
+        about whether they are wired together.
+        """
+        import yaml
+        from shiftprofile.fill import RunManifest, main
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        with RunManifest(cache / "run_manifest.jsonl") as manifest:
+            manifest.record(
+                event="run_start",
+                training={"epochs": 2, "batch_size": 8, "lr": 0.1},
+            )
+
+        trained = []
+        monkeypatch.setattr(
+            "shiftprofile.train.load_or_train",
+            lambda *a, **kw: (trained.append(1), (object(), {}))[1],
+        )
+
+        # The shipped config's `epochs: 1` against a cache recorded at 2.
+        rc = main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(cache),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu",
+            "--stages", "predict",
+        ])
+
+        assert rc == 2, "the run must refuse rather than reuse the earlier weights"
+        assert not trained, "it refused only after doing work"
+        out = capsys.readouterr().out
+        assert "REFUSING" in out and "epochs" in out
+
+    def test_the_cli_records_the_recipe_it_ran_with(self, tmp_path, monkeypatch):
+        """Nothing can be checked on the next run that was not written on this
+        one, so the write is as load-bearing as the check."""
+        import json
+
+        from shiftprofile.fill import main
+
+        monkeypatch.setattr(
+            "shiftprofile.train.load_or_train", lambda *a, **kw: (object(), {})
+        )
+        monkeypatch.setattr(
+            "shiftprofile.predict.predict_cell",
+            lambda cell, model, clean_root, corrupt_root, cache, **kw: np.zeros(
+                (8, 10), np.float32
+            ),
+        )
+
+        cache = tmp_path / "cache"
+        main([
+            "--config", str(self._config(tmp_path)),
+            "--budget-minutes", "5",
+            "--cache-write", str(cache),
+            "--data-root", str(tmp_path / "data"),
+            "--corrupt-root", str(tmp_path / "corrupt"),
+            "--device", "cpu",
+            "--stages", "predict",
+        ])
+
+        lines = [
+            json.loads(ln)
+            for ln in (cache / "run_manifest.jsonl").read_text().splitlines()
+            if ln.strip()
+        ]
+        starts = [e for e in lines if e.get("event") == "run_start"]
+        assert starts, "no run_start was recorded"
+        # The config sets epochs 1 and batch_size 8; lr is defaulted.
+        assert starts[-1]["training"] == {"epochs": 1, "batch_size": 8, "lr": 0.1}

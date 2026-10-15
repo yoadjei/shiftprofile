@@ -96,6 +96,86 @@ class RunManifest:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    @staticmethod
+    def previous_training_recipe(path: Path | str) -> Optional[dict[str, Any]]:
+        """The training recipe the last run against this cache used, if recorded.
+
+        Read back rather than merely written, because the recipe is the one
+        thing that shapes every artifact in the cache without appearing in any
+        artifact's key. See `check_training_recipe`.
+
+        A malformed or truncated line is skipped rather than raised on: the
+        manifest is append-only and fsynced per line, so the only line that can
+        be broken is one from a session killed mid-write, and that is a thing to
+        tolerate rather than a reason to refuse the run.
+        """
+        path = Path(path)
+        if not path.exists():
+            return None
+        recipe = None
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict) and entry.get("training") is not None:
+                    recipe = entry["training"]
+        return recipe
+
+
+def check_training_recipe(
+    previous: Optional[dict[str, Any]], current: dict[str, Any]
+) -> Optional[str]:
+    """Why this run must not write into this cache, or None if it may.
+
+    The training hyperparameters are in the *checkpoint's* key, so a changed
+    `epochs` correctly trains a new model. They are not in the keys of anything
+    downstream: `predict`, `explain` and `curves` are keyed on the cell, which
+    names `model_id` and `seed` and nothing about how the model was trained. So
+    a cache that has seen two recipes holds logits from one model under keys a
+    later run will happily reuse for another.
+
+    The realistic way in is not a protocol change. It is a scratch config with
+    `epochs: 2` run against the shared cache to check the pipeline works, which
+    on a quota-limited project is a normal thing to do, followed by the real
+    config. Nothing in the keys records that the first run happened.
+
+    Refusing is the remedy rather than warning, and the fix offered is a
+    separate `--cache-write` root rather than a flag, because a cache holding
+    two training recipes is not a coherent artifact store and there is no
+    reading of it that makes the mixed results meaningful.
+
+    Args:
+        previous: Recipe recorded by an earlier run, or None if there is none.
+        current: Recipe this run would use.
+
+    Returns:
+        An explanatory message if the run must not proceed, else None.
+    """
+    if previous is None or previous == current:
+        return None
+    changed = sorted(
+        k for k in set(previous) | set(current) if previous.get(k) != current.get(k)
+    )
+    lines = [
+        "this cache was built with different training hyperparameters:",
+        "",
+    ]
+    lines += [
+        f"    {k}: {previous.get(k)!r} previously, {current.get(k)!r} now" for k in changed
+    ]
+    lines += [
+        "",
+        "They are in the checkpoint's cache key, so the model would be retrained,",
+        "but predict/explain/curves are keyed on the cell alone. This run would",
+        "reuse artifacts computed from the earlier model's weights and report",
+        "them as this model's.",
+        "",
+        "Write to a different --cache-write root, or restore the earlier values.",
+    ]
+    return "\n".join(lines)
+
 
 class ProgressReporter:
     """Rate-limited progress, because an unbounded one cost a two-hour run.
@@ -639,9 +719,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"manifest    {manifest_path}")
     print()
 
+    training_recipe = {
+        "epochs": config.get("epochs", DEFAULT_EPOCHS),
+        "batch_size": config.get("batch_size", DEFAULT_BATCH_SIZE),
+        "lr": config.get("lr", DEFAULT_LR),
+    }
+    refusal = check_training_recipe(
+        RunManifest.previous_training_recipe(manifest_path), training_recipe
+    )
+    if refusal is not None:
+        print(f"REFUSING: {refusal}")
+        return 2
+
     with RunManifest(manifest_path) as manifest:
         manifest.record(
             event="run_start",
+            # The recipe shapes every artifact in this cache and appears in no
+            # artifact's key but the checkpoint's, so the manifest is the only
+            # place it is recorded. `check_training_recipe` reads it back.
+            training=training_recipe,
             config=str(args.config),
             device=device,
             budget_minutes=args.budget_minutes,
