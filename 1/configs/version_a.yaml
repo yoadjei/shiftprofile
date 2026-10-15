@@ -1,53 +1,172 @@
-# Version A: pre-registered primary grid
-# 3 models x 5 seeds x (1 clean + 5 corruptions x 3 severities) = 240 cells
-# Estimated GPU budget: ~50-100 GPU-hours (multiple Kaggle sessions with preemption)
-
+# Version A: the pre-registered primary grid (prereg section 7).
+# 3 models x 5 seeds x (1 clean + 5 corruptions x 3 severities) = 240 cells.
+#
+# Six arms, not three. The P3b pilot established that the pre-registered
+# per-pixel-i.i.d. control is not a valid reference for removal-curve
+# faithfulness: it does not hold mask geometry fixed, and a model-free coarse
+# blob (`random_lowres_4`) reads as low as -0.19932 -- larger than any explainer
+# effect the study has measured, produced by blob size with no model input at
+# any point. Every faithfulness claim here therefore carries a geometry-matched
+# reference alongside the pre-registered one, so the raw-versus-matched contrast
+# is a difference of two reported numbers rather than a change to
+# `paired_removal_curves`, which prereg section 6 pins as validity control #1.
+#
+# ---------------------------------------------------------------------------
+# BUDGET, derived from the pilot's measured costs, not estimated
+# ---------------------------------------------------------------------------
+# Ground truth is the P3b run in `kaggle final.yml`: 510 units in 7325.1 s on a
+# Kaggle T4, 0 failed, 0 cached. Every figure below is computed from that log's
+# own progress checkpoints, which are quoted here so the arithmetic can be
+# redone from the log alone. Note that `ProgressReporter` prints at the START of
+# unit k, so an elapsed time beside "k units" covers k-1 units of work.
+#
+# Per-stage unit cost, measured:
+#
+#   curves   8.466 s/unit.  Steady state over units 50..399. The 25-unit
+#            progress windows sit in 8.36-8.52 s/unit while the 10-arm list
+#            rotates through them, which is the evidence that curves cost does
+#            not depend on the explainer arm. Not assumed -- measured.
+#   explain  11.280 s/unit = 112.8 s per cell for the pilot's TEN arms. Taken
+#            over units 25..74, which is exactly five complete passes of the
+#            arm list, so the mix is balanced without needing any single arm's
+#            cost. (Units 1..24 ran at 15.00 s/unit: ~89 s of one-off warm-up.)
+#   predict  not separable. The predict stage is 2679 s by residual, of which
+#            1362 s is the one-off CIFAR-10 download (no longer paid: e072cfd
+#            mounts it). That leaves T + 10P = 1317 s for one 50-epoch resnet18
+#            training plus ten predict units, and the log timestamps neither.
+#            Both ends of the line are carried below rather than split by guess.
+#
+# Per-arm cost is NOT recoverable from that log. The only contrast its 25-unit
+# checkpoints support is {IG, grad_cam, random, IG_rolled, random_lowres_32} vs
+# {grad_cam_rolled, random_lowres_2/4/8/16}, and solving it returns 111.4 s
+# against 1.4 s per cell -- i.e. random_lowres_32 expensive and random_lowres_2
+# free, which is impossible. So no per-arm number is used. Instead: this config's
+# six arms are a strict SUBSET of the pilot's ten, so per-cell explain is at most
+# 112.8 s (fewer arms cannot cost more) and at least 112.8 - 4*11.28 = 67.7 s.
+#
+# Work units, from `enumerate_cells` on this file: 240 cells ->
+#   predict 240 + explain 1440 + curves 1440 = 3120 units.
+#
+# Cost of the 160 cells whose architecture the pilot actually timed
+# (resnet18 + resnet18_augmix, 10 model-seed pairs):
+#
+#   explain        160 cells x [67.7, 112.8] s   [3.01, 5.01] h
+#   curves         960 units x 8.466 s           2.26 h
+#   train+predict  10 T + 160 P, P in [0,11.28]  [3.66, 3.85] h
+#   ------------------------------------------------------------
+#   TOTAL                                        [8.92, 11.12] GPU-h
+#
+# Scaling the same rate onto vit_tiny's 80 cells gives 16.68 GPU-h for the whole
+# grid. That figure is CONDITIONAL and is the weakest thing here -- see below.
+#
+# Against Kaggle's 12-hour preemptible session:
+#   the 160 resnet18-family cells fit, at 11.12 h with 0.88 h of margin, which
+#   is too thin to rely on. The whole 240-cell grid does NOT fit: 16.68 h.
+#   Split by MODEL. Each (model, seed) pair is self-contained -- train once,
+#   then 16 cells -- and the cache makes a killed session cost only the unit in
+#   flight. One model x 5 seeds is 5.56 h, so: three sessions, one per model,
+#   each at `--budget-minutes 660`, leaving ~6.4 h of headroom against
+#   preemption. At the free tier's 30 GPU-h/week the whole grid is ~56% of one
+#   week's quota.
+#
+# NOT covered by this extrapolation, stated rather than papered over:
+#   - vit_tiny has never been trained or run. No training, predict or
+#     attribution time exists for it. The 16.68 h line assumes it costs what
+#     resnet18 costs; no multiplier is invented in place of a measurement.
+#     Two hard blockers besides cost: `gradcam_target_layer` raises for any
+#     architecture without `layer4`, so grad_cam and grad_cam_rolled cannot run
+#     on it at all; and `to_normalised_tensor` emits 32x32 while `vit_tiny` is
+#     built at img_size=112, which prereg section 4 row 2 also leaves undecided.
+#   - resnet18_augmix has never been run either, though it is the same
+#     architecture (`build_model` maps both to `resnet18_cifar`), so its
+#     per-epoch forward/backward cost is identical and only AugMix's CPU-side
+#     augmentation is unmeasured. Separately: `load_or_train` never passes
+#     `augmix=True`, so as the code stands this arm trains exactly like
+#     `resnet18` and secondary hypothesis S3 cannot be tested from it.
+#   - T and P are one residual, carried as an interval.
+#   - One run on one T4. No repeat timings, so no jitter estimate.
+#
 name: version_a
 track: vision
 
 # Models: three diverse architectures for robustness of conclusions
 models:
-  - resnet18
-  - resnet18_augmix
-  - vit_tiny
+- resnet18
+- resnet18_augmix
+- vit_tiny
 
 # Seeds: five for stable variance component estimation
 # (REML unbiased at five groups; fewer would compromise the mixed model)
 seeds:
-  - 0
-  - 1
-  - 2
-  - 3
-  - 4
+- 0
+- 1
+- 2
+- 3
+- 4
 
 # Five corruption families covering the main distribution-shift categories
 shift_families:
-  - gaussian_noise      # Noise family
-  - shot_noise          # Noise family
-  - defocus_blur        # Blur family
-  - fog                 # Weather family
-  - jpeg_compression    # Digital family
+- gaussian_noise      # Noise family
+- shot_noise          # Noise family
+- defocus_blur        # Blur family
+- fog                 # Weather family
+- jpeg_compression    # Digital family
 
 # Three severity levels for gradient measurement
 severities:
-  - 1
-  - 3
-  - 5
+- 1
+- 3
+- 5
 
-# Attribution methods for faithfulness evaluation
 explainers:
-  - integrated_gradients
-  - grad_cam
-  - random
+# The two attribution methods the study tests.
+- integrated_gradients
+- grad_cam
+# Pre-registered control, prereg section 6 validity control 1: faithfulness is
+# always reported against a random control in the same cell, and
+# `relative_faithfulness` raises without it. Per-pixel i.i.d., so it does NOT
+# hold mask geometry fixed -- which is the defect the pilot found. Kept anyway,
+# because the raw-minus-matched contrast is the difference of the two readings
+# and needs both.
+- random
+# Geometry-matched to integrated_gradients: IG's own map, translated by a seeded
+# offset. Identical value multiset, identical autocorrelation, no registration
+# to the image it was computed from, so the difference is what IG's AIM is worth
+# once mask shape is held fixed.
+- integrated_gradients_rolled
+# Geometry-matched to grad_cam, the same way and for the same reason.
+- grad_cam_rolled
+# Model-free geometry match for grad_cam: noise on a 4x4 lattice, ReLU'd and
+# bilinearly upsampled through Grad-CAM's exact pipeline. 4 is ResNet-18's final
+# feature-map resolution, i.e. the resolution Grad-CAM's map actually has. It
+# sees no model, no image and no label, so whatever it registers is blob size
+# alone -- the pilot measured -0.19932 for a coarse blob under `black`, which is
+# larger than any explainer effect in the study.
+- random_lowres_4
 
-# Imputation scheme for removal curves (testing attribution quality)
-imputation: mean
-
-# Evaluation set size: 2000 from CIFAR-10 test set for stable metric estimation
-n_eval_images: 2000
+# 1000, not 2000. Prereg section 4 row 3 escalates to 2000 only on the P3 gate,
+# and amendment A8 records that gate as NOT DECIDABLE: 12 of its 14 passes carry
+# no correctly-aimed attribution. The sample size therefore stays at 1000 by
+# default rather than by the rule, and the stale 2000 in this file predated that
+# finding. A4 also stands: the worst pair needs ~98,000 images against a
+# 10,000-image test set, so escalation is unreachable, not merely expensive.
+n_eval_images: 1000
 
 # Attribution parameters
 ig_steps: 32
+# The frozen protocol's IG baseline under its true name (prereg A6): zeros in
+# normalised space, which IS the dataset mean. Stated rather than defaulted so
+# the cache key records what was actually run.
+ig_baseline: mean
+# Required by the two `_rolled` arms -- `explain_batch` refuses to roll without
+# an explicit seed, because the offsets ARE the control.
+roll_seed: 0
+
+# One scheme, singular: `mean` is the frozen protocol's. The pivot requires
+# matched controls, not a scheme sweep -- varying imputation is E6's axis and is
+# left there. Each extra scheme adds 1440 curves units, which is +3.39 GPU-h on
+# this grid (see the budget block).
+imputation: mean
 
 # Training parameters (same as pilot for comparability)
 epochs: 50
