@@ -934,3 +934,115 @@ between here and a tag:
 images, three shift families: one architecture, one seed, one dataset. The geometry account still rests
 on a single model's 4×4 Grad-CAM resolution. H1b exists precisely because that is a weakness, and H1b is
 the hypothesis that cannot currently be run.
+
+---
+
+| Date | Section | Change | Reason | Data seen at time of amendment |
+|---|---|---|---|---|
+| 2026-10-15 | §4, row 3 (attribution sample size) | **Decided: 1000.** The matched-metric gate was run and fails at 0 of 29. The rule's escalation to 2000 is permitted and does not help: 0 of 29 at 2000 either | A10 | Session 1 rerun under `curves-v3` at `34e351a`: 510 units, 0 failed, 8713.3s, with `P3 GATE (GEOMETRY-MATCHED)` printed for the first time |
+| 2026-10-15 | §8, row 4 | Fires again, on the corrected metric | A10 | As above |
+| 2026-10-15 | §2, H3a / H3b | Recorded as **unresolved at this scale**, with point estimates, not as null results | A10 | As above |
+
+**A10 — §4 row 3 is decided, and the matched gate decides it against H3 rather than for it.**
+A9 left row 3 open because the matched-metric gate existed in code and had never been run. It has now
+been run. Log: `docs/runs/2026-10-15b_curves-v3_with_matched_gate.log`.
+
+**The run reproduces the previous one bit-for-bit.** The FAITHFULNESS, GEOMETRY LADDER and
+GEOMETRY-MATCHED blocks are byte-identical between this log and
+`docs/runs/2026-10-15_curves-v3_pilot_validity.log`, and the training losses match to the printed digit
+at every reported epoch. That is not a formality here: `train-v2` put `epochs`, `batch_size` and `lr`
+into the training cache key, so the checkpoint was not found and was retrained from scratch, and the
+retrained weights reproduced every downstream number. Nothing in §2 or A8 moves.
+
+**The matched gate fails completely: 0 of 29 resolvable pairs, against 14 of 85 on the raw metric.**
+The six closest, with the sample size each would need, since the half-width falls as 1/√n:
+
+| imputation | pair | family | ratio | n needed |
+|---|---|---|---|---|
+| `black` | grad_cam vs random_lowres_4 | defocus_blur | 0.143 | 2,045 |
+| `uniform_noise` | grad_cam vs random_lowres_4 | gaussian_noise | 0.152 | 2,310 |
+| `black` | grad_cam vs random_lowres_4 | fog | 0.154 | 2,372 |
+| `uniform_noise` | grad_cam vs grad_cam_rolled | gaussian_noise | 0.161 | 2,592 |
+| `black` | grad_cam vs grad_cam_rolled | fog | 0.164 | 2,690 |
+| `black` | grad_cam vs grad_cam_rolled | defocus_blur | 0.172 | 2,958 |
+
+Scaled across the whole set: **0 of 29 at n=2000**, 6 at n=3000, 7 at n=5000, 19 at n=10000 — and the
+CIFAR-10 test set holds 10,000 images, so the last of those is the entire test set.
+
+**How narrowly 2000 fails, stated so "0 of 29" is not read as a wide margin.** The best pair reaches
+0.10112 at n=2000 against a threshold of 0.10 — it misses by 0.00112, and clears at n=2045. The second
+and third miss by 0.0075 and 0.0089. So the escalation does not fail decisively; it fails by about one
+percent of the threshold on one pair and by more on everything else. That is a reason to report the
+escalation as insufficient rather than as refuted, and it is also why n=3000 buys six pairs where
+n=2000 buys none. Nothing in §4 permits 3000, and this amendment does not invent it.
+
+**So row 3 is decided at 1000, and decided by the rule rather than by default.** §4's rule escalates to
+2000 on a failing gate. The escalation is permitted and is not taken, for the reason A4 already gave
+and which the matched metric now reproduces exactly: 2000 moves nothing. A4 stands, and its arithmetic
+now applies to the metric this document actually uses.
+
+**What the gate does and does not bear on, which must not be blurred.** The gate measures the *change*
+in matched faithfulness from clean to severity 5. It does not measure its *level*. The level is
+resolved at 7.3 to 10.4 half-widths in 11 of 12 comparisons. So the corrected instrument can state that
+an explainer beats a control of its own mask geometry, and cannot state whether that advantage degrades
+under shift. H1 and H2 rest on the level and are unaffected by this amendment. H3 rests on the change
+and is the thing the gate has just failed.
+
+**H3a and H3b are recorded as unresolved at this scale, not as null.** The degradation is not absent.
+All twelve matched pairs, change from clean to severity 5 as a fraction of the pair's own level,
+against accuracy's **−36.3%** (0.8610 → 0.5487):
+
+| imputation | pair | mean change | level | relative | vs accuracy |
+|---|---|---|---|---|---|
+| `black` | grad_cam vs random_lowres_4 | −0.0566 | +0.09194 | −61.6% | faster |
+| `black` | grad_cam vs grad_cam_rolled | −0.0584 | +0.10068 | −58.0% | faster |
+| `uniform_noise` | IG vs IG_rolled | −0.0265 | +0.04855 | −54.6% | faster |
+| `mean` | IG vs IG_rolled | −0.0314 | +0.07389 | −42.5% | faster |
+| `mean` | grad_cam vs grad_cam_rolled | −0.0454 | +0.11523 | −39.4% | faster |
+| `uniform_noise` | grad_cam vs random_lowres_4 | −0.0430 | +0.11050 | −38.9% | faster |
+| `mean` | grad_cam vs random_lowres_4 | −0.0384 | +0.10078 | −38.1% | faster |
+| `uniform_noise` | grad_cam vs grad_cam_rolled | −0.0447 | +0.12083 | −37.0% | faster |
+| `blur` | grad_cam vs grad_cam_rolled | −0.0121 | +0.09648 | −12.5% | **slower** |
+| `blur` | grad_cam vs random_lowres_4 | −0.0081 | +0.09209 | −8.8% | **slower** |
+| `blur` | IG vs IG_rolled | +0.0073 | +0.07100 | **+10.2%** | **rises** |
+| `black` | IG vs IG_rolled | +0.0038 | −0.00398 | n/a | level unresolved |
+
+H3a predicts faithfulness degrades *faster* than accuracy. **Eight of the eleven interpretable pairs
+run in that direction and past it**, at 37.0% to 61.6% against accuracy's 36.3%. The three that do not
+are all `blur`, where two degrade more slowly than accuracy and IG's advantage *increases* with
+severity. The twelfth, `black`/IG, has a level of −0.00398 — unresolved at 0.6 half-widths — so a
+ratio against it is meaningless and is not computed.
+
+`blur` splitting from the other three schemes is the same split H1a shows, where `blur` is the one
+scheme whose artifact does not exceed the largest matched effect. It is also the only scheme in which
+all ten arms read positive on the raw metric. Whether one mechanism produces all three is not
+established here and is not claimed.
+
+None of this is resolved: the gate fails on every one of these pairs, which is exactly the statement
+that their intervals are too wide to separate these rates from accuracy's. Reported as an unresolved
+comparison with informative point estimates. Calling it a null would overclaim in the opposite
+direction from H3a; calling it support for H3a would ignore the gate this amendment exists to record.
+
+**§8 row 4 — "faithfulness intervals exceed the effect" — fires again, and this time on the metric the
+document endorses.** A2 recorded it firing on the raw metric under the inverted mask; A8 recorded the
+raw gate at 14 of 85 on corrected data. It now fires on the geometry-matched metric, which is the
+instrument §4 row 1 selected. That is a stronger statement than either earlier one: the failure is not
+an artifact of the broken control and not an artifact of the broken mask. The removal-curve family,
+measured correctly against a correct control, does not resolve a degradation effect of this size on
+CIFAR-10 at any sample size the dataset admits.
+
+**What this does to Version A.** The 240-cell grid in `configs/version_a.yaml` was sized for H3's
+mixed-effects fit. The gate is a per-(scheme, explainer, family) resolution check and the mixed-effects
+model pools across 15 (model, seed) combinations, so the grid has more power than the gate and could
+plausibly resolve the H3a interaction where the gate cannot. That is a real difference and this
+amendment does not claim H3 is dead. But §4's rule offers 1000 or 2000 and offers nothing else;
+"resolve it by pooling the full grid" is not a rescue the protocol pre-registered, and adopting it
+after seeing the gate fail would be the same post-hoc move A9 refused to disguise. Whether to run
+Version A for H3 is therefore an explicit decision for the author, on the record, and is **not taken
+here**. H1 and H2 need no such grid: they are resolved, and what they need is seeds and `vit_tiny`.
+
+**Row 3's entry in the freeze table above is discharged.** The others stand unchanged.
+
+**Operational note, recorded because it is the second time.** CIFAR-10 was downloaded inside the
+session again, 51:15 against the previous run's 22:42, so roughly 51 minutes of the 2.42-hour session
+was a download that mounting a dataset removes entirely.
