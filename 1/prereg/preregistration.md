@@ -3,6 +3,8 @@
 **Status:** DRAFT. Not binding until committed with a git tag `prereg-frozen` and no full-grid data has
 been observed.
 **Date drafted:** 2026-09-22
+**Last amended:** 2026-10-15 (A9: §2 rewritten onto the geometry-matched metric; §4 row 1 re-axed onto
+the control. Read §9 A9 before §2 or §4.)
 **Gate:** P2. Depends on the P1 novelty gate, which passed; that assessment is held internally.
 **Protocol:** the committed configs under `configs/`, the fixed evaluation indices, and the pipeline in
 `shiftprofile/` are the operative specification. Where this document and the code disagree, this document
@@ -15,6 +17,13 @@ governs the analysis and the code is the bug.
 Everything in §2–§7 is confirmatory: fixed before the full grid is run, tested as stated, reported whether
 or not it comes out favourably. Anything not in this document that appears in the paper is exploratory and
 will be labelled as such in the text, not merely in an appendix.
+
+**One qualification, added 2026-10-15 by A9.** §2 was rewritten after the P3b pilot and before any
+Version A cell was filled. The pilot is not the full grid, and no `prereg-frozen` tag has ever been cut
+(A1), so §2 remains confirmatory with respect to Version A. It is **not** confirmatory with respect to
+the pilot: every pilot figure §2 quotes is labelled exploratory and generating at the point it is
+quoted, so a reader can see exactly what was known when each hypothesis was written. A9 records what
+changed and on whose decision.
 
 The point is not ceremony. The study's central risk (audit §31, attack 20 — "engineering, not research")
 is answered only by having committed to a falsifiable prediction before seeing the data.
@@ -35,45 +44,301 @@ intensity.
 
 ---
 
-## 2. Primary hypothesis
+## 2. Primary hypotheses
+
+**Rewritten 2026-10-15 by amendment A9.** From 2026-09-22 to 2026-10-15 this section carried one primary
+hypothesis, H3, in two parts, both stated on `relative_faithfulness`. The P3b pilot established that
+`relative_faithfulness` is not a valid level: the control it is measured against does not hold mask
+geometry fixed, and a hypothesis stated on an invalid outcome cannot be tested whatever the data say.
+
+H3 is **restated, not deleted**. Its structure is unchanged — two independently testable parts, the same
+mixed-effects specification, the same Cox model with leave-one-shift-family-out, the same decision rules,
+the same insufficient-events rule. Only the outcome variable moves, and each consequence of the move is
+stated where it falls.
+
+Two validity hypotheses are added ahead of it and are primary. They are what the pilot actually
+establishes, and H3 cannot be read without them: H3 asks the original question with a corrected
+instrument, and H1 and H2 are the evidence that the instrument needed correcting.
+
+### Definitions used throughout §2
+
+| Name | Definition |
+|---|---|
+| `raw_faithfulness` | `removal_auc(control) − removal_auc(explainer)` with the control drawn **per-pixel i.i.d.** This is `metrics.faithfulness.relative_faithfulness`, and it is the outcome this section carried before A9. Invalid as a level; see H1a. |
+| `matched_faithfulness` | `raw_faithfulness(explainer) − raw_faithfulness(control)` for a control of the **same mask geometry**. The per-pixel-i.i.d. term is bitwise identical in both halves — same `control_seed`, same images, same imputation, same model — so it cancels exactly, leaving `removal_auc(control) − removal_auc(explainer)` with a control of the explainer's own shape. Computed per image and bootstrapped paired; `pilot_report.matched_rows`. |
+| geometry-matched control | Either `<name>_rolled` — the explainer's own map displaced by a seeded per-image offset drawn from the h·w−1 non-identity translations, so the value multiset and the spatial autocorrelation are identical and only registration to the image is destroyed — or `random_lowres_<g>` — noise on a g×g lattice, ReLU'd and bilinearly upsampled through Grad-CAM's exact pipeline, reading nothing from the model, the image or the label. |
+| native map resolution | The spatial grid an attribution is computed on before upsampling. ResNet-18's Grad-CAM map is **4×4**: the CIFAR stem preserves 32×32 and `layer2`–`layer4` each halve it. ViT-Tiny at `img_size=112`, patch 16, is **7×7**. Integrated Gradients is pixel-level on both. |
+
+### What is already known, and what that makes it
+
+Everything quoted below from the P3b pilot is **exploratory and hypothesis-generating**. It is one
+architecture (`resnet18`), one seed (0), 1000 images, 10 cells, three shift families and four imputation
+schemes, run under `curves-v3` on 2026-10-15 — 510 units, 0 failed. It is quoted at each hypothesis so a
+reader can see exactly what was known at the moment that hypothesis was written; that is the only thing
+that makes the confirmatory/exploratory line checkable rather than asserted. **No hypothesis below is
+supported or refuted by it.** Each is tested on Version A (§7), on seeds and architectures the pilot has
+not touched. Every pilot figure is checkable against `docs/results.md` Part 2 and
+`docs/runs/2026-10-15_curves-v3_pilot_validity.log`.
+
+---
+
+### H1 — the geometry artifact
+
+#### H1a — the artifact is the size of the effect
+
+*A control that does not hold mask geometry fixed admits an apparent faithfulness effect at least as
+large as the largest real one.*
+
+- **Outcome:** two quantities per (model, seed, imputation):
+  - **A** = max over the model-free `random_lowres_<g>` arms of |mean `raw_faithfulness`|. No model, no
+    image and no label enters any of these arms, so whatever they register is mask shape and nothing else.
+  - **E** = max over the two explainers and their matched controls of |mean `matched_faithfulness`|.
+- **Test:** paired bootstrap over evaluation images of `A − E`, 2000 resamples, seeded, within
+  (model, seed, imputation) on the committed fixed indices.
+- **Decision rule:** supported for an imputation scheme if the 95% CI of `A − E` excludes zero and is
+  positive. Reported **per scheme and as a count of schemes, never pooled**: the pilot shows the
+  artifact's size is a strong function of the scheme, and pooling would average a real dependence away.
+- **Primary scheme:** `mean`, the one `configs/version_a.yaml` runs. Any further scheme is reported
+  alongside it, not substituted for it.
+- **What would falsify it:** `A − E` negative, or indistinguishable from zero, in the primary scheme.
+  Then the per-pixel-i.i.d. control admits no artifact large enough to matter and the pivot this document
+  makes is unwarranted.
+
+**Pilot (exploratory, seed 0).** The model-free ladder, each value a mean over the pilot's 10 cells:
+
+| imputation | grid 2 | 4 | 8 | 16 | 32 | span (2→32) |
+|---|---|---|---|---|---|---|
+| `black` | −0.19932 | −0.13929 | −0.07275 | −0.02958 | +0.00531 | 0.2046 |
+| `uniform_noise` | −0.18550 | −0.15432 | −0.11924 | −0.06960 | −0.00027 | 0.1852 |
+| `mean` | −0.15983 | −0.12500 | −0.09769 | −0.07262 | +0.00164 | 0.1615 |
+| `blur` | +0.04398 | +0.04112 | +0.02673 | +0.00974 | +0.01548 | 0.0285 |
+
+Monotone toward zero from grid 2 to grid 16 under all four schemes; grid 32 breaks monotonicity only
+under `blur`. Against the largest matched explainer effect in the same scheme:
+
+| imputation | A (model-free) | E (largest matched explainer effect) | A − E |
+|---|---|---|---|
+| `black` | 0.19932 | 0.10068 | **+0.0986** |
+| `uniform_noise` | 0.18550 | 0.12083 | **+0.0647** |
+| `mean` | 0.15983 | 0.11523 | **+0.0446** |
+| `blur` | 0.04398 | 0.09648 | −0.0525 |
+
+Three of four schemes in the predicted direction and `blur` against it. The headline claim that the
+artifact is larger than any explainer effect in the study is true **globally** — 0.19932 against a largest
+matched effect of 0.12083 and a largest raw explainer magnitude of 0.13321 — and is **not** true scheme by
+scheme. Under `blur` the artifact is roughly half the effect. Stated here rather than left for a reader to
+discover, because H1a is registered per scheme precisely so that this cannot be averaged out of sight.
+
+#### H1b — the artifact scales with the attribution's native resolution
+
+*The geometry account makes a prediction that an "attributions are simply unfaithful under shift" account
+does not: the artifact is a function of how coarse the mask is, so a model whose attribution map is finer
+carries a smaller artifact.*
+
+- **Prediction, stated before the data exist.** ResNet-18's Grad-CAM map is 4×4. ViT-Tiny at
+  `img_size=112`, patch 16, is 7×7 — 49 tokens against 16. The geometry account predicts the artifact
+  measured on ViT-Tiny is **smaller in magnitude** than on ResNet-18, by about what the measured
+  grid-4-to-grid-8 segment of the ladder spans. The rival account predicts **no relationship with
+  resolution at all**.
+- **Outcome:** |mean `raw_faithfulness`| of the model-free arm at each model's own native resolution,
+  compared across models within (seed, imputation).
+- **Test:** paired bootstrap over evaluation images of the difference between the two models' artifacts,
+  within (seed, imputation); reported per seed, aggregated across seeds by §6's mixed-effects model.
+- **Decision rule:** the geometry account is supported if that difference's 95% CI excludes zero in the
+  predicted direction. It is **falsified** if the CI excludes zero in the opposite direction, or if it
+  includes zero at a resolution that could have detected the predicted difference. A null at a resolution
+  too coarse to detect the predicted size is reported as *underpowered*, not as evidence for either
+  account — which is why the power statement below is written now and not afterwards.
+- **Power, stated in advance.** The ladder's own grid-4-to-grid-8 step is the size of the effect this
+  predicts, and in the pilot that step is clearly resolved under two schemes and marginal under two:
+
+  | imputation | grid 4 | grid 8 | step | larger per-arm half-width | step / half-width |
+  |---|---|---|---|---|---|
+  | `black` | −0.13929 | −0.07275 | 0.06654 | 0.01969 | 3.4 |
+  | `uniform_noise` | −0.15432 | −0.11924 | 0.03508 | 0.01226 | 2.9 |
+  | `mean` | −0.12500 | −0.09769 | 0.02731 | 0.01876 | 1.5 |
+  | `blur` | +0.04112 | +0.02673 | 0.01439 | 0.01106 | 1.3 |
+
+  Under `mean` alone — the only scheme `configs/version_a.yaml` currently runs — this prediction is tested
+  at about 1.5 per-arm half-widths and could fail to resolve for want of precision rather than for want of
+  an effect. The half-widths quoted are each arm's own, not the half-width of the paired difference, which
+  is tighter and is the interval the test actually uses; the paired statistic is not computed by the
+  present report (see the implementation gap below).
+- **Genuinely untested, and currently unrunnable.** `vit_tiny` has never been trained or run. Two
+  blockers, both verified in the code for this amendment: `models.vision.gradcam_target_layer` returns
+  `model.layer4[-1]` behind a `hasattr(model, "layer4")` check and otherwise raises, so `grad_cam` and
+  `grad_cam_rolled` cannot run on a ViT at all; and `data.cifar.to_normalised_tensor` converts
+  `(N, 32, 32, 3)` uint8 to `(N, 3, 32, 32)` and never resizes, while `vit_tiny` is built from
+  `timm`'s `vit_tiny_patch16_224` at `img_size=112`. 80 of Version A's 240 cells are ViT-Tiny's and none
+  of them can run. §4 row 2 is the decision that unblocks them and it is unresolved.
+- **Implementation gap, recorded before it is hit.** `explain.LOWRES_GRIDS` is `(2, 4, 8, 16, 32)`. There
+  is no `random_lowres_7` arm, so ViT-Tiny's native resolution has no exact model-free match on the
+  existing ladder. Either 7 is added to the grid set, or the prediction is read against the
+  grid-4-to-grid-8 interpolation above. The choice is made before any ViT cell is filled and recorded by
+  amendment. Separately, `pilot_report.matched_pairs` constructs only explainer-versus-control pairs, so
+  the grid-to-grid paired difference this test needs does not yet exist in code.
+
+---
+
+### H2 — the pre-registered control is blind to the defect it exists to catch
+
+Two parts. H2a is a prediction about Version A. H2b is not a prediction: it is a property of the control,
+with a demonstration this project has already paid for, and it is registered as a requirement on the
+instrument rather than as something to be tested.
+
+#### H2a — raw and matched disagree in sign
+
+*Changing only the control reverses the sign of the faithfulness conclusion, on the same images, the same
+attributions and the same removal curves.*
+
+- **Outcome:** per (model, seed, imputation, explainer), the signs of mean `raw_faithfulness` and mean
+  `matched_faithfulness`.
+- **Counted as a disagreement** only when both readings exclude zero in their own 95% bootstrap CI and the
+  signs differ. A raw reading that cannot clear zero is not a sign, and is reported as unresolved.
+- **Decision rule:** supported if at least one (imputation, explainer) cell disagrees, per that
+  definition, in a majority of the (model, seed) pairs run. Reported as a count out of the cells run, with
+  the full per-cell table, never as a proportion alone.
+- **Second, structural rule — the one that discriminates between accounts.** A generic "the control
+  matters" account predicts disagreements scattered across explainers. The geometry account of H1b
+  predicts them **concentrated in the explainer with the coarser native map**. H2a is recorded as
+  *strongly* supported only if every disagreeing cell belongs to the coarser-mapped explainer, and the
+  distribution of disagreements across explainers is reported whatever it is.
+- **Why primary and not a footnote.** §6's first validity control requires that faithfulness is *always*
+  reported relative to a control. The control is therefore part of the metric's definition, and a sign
+  that depends on it is §8 row 5 — *conclusions flip with faithfulness metric choice* — firing on the
+  control axis.
+
+**Pilot (exploratory, seed 0).** 3 of 8 (imputation, explainer) cells disagree, and all three are Grad-CAM:
+
+| imputation | explainer | raw | matched (vs own `_rolled`) | signs |
+|---|---|---|---|---|
+| `black` | grad_cam | −0.04735 | +0.10068 | **disagree** |
+| `mean` | grad_cam | −0.02421 | +0.11523 | **disagree** |
+| `uniform_noise` | grad_cam | −0.04382 | +0.12083 | **disagree** |
+| `blur` | grad_cam | +0.13321 | +0.09648 | agree |
+| `black` | integrated_gradients | −0.04214 | −0.00398 | agree (matched unresolved at 0.6 half-widths) |
+| `mean` | integrated_gradients | +0.02605 | +0.07389 | agree |
+| `uniform_noise` | integrated_gradients | +0.00203 | +0.04855 | agree |
+| `blur` | integrated_gradients | +0.07246 | +0.07100 | agree |
+
+Resolution of the raw end of the three disagreements, as multiples of the mean of that arm's per-cell
+half-widths: `uniform_noise` 5.2, `black` 2.4, `mean` 1.4. Under `mean` the raw end is the weakest of the
+three and is not resolved at every severity individually — the per-cell values at severities 3 and 5 are
+−0.00829 ± 0.01779 and −0.00867 ± 0.01677. The matched end is resolved in all three, at 8.6 to 10.4
+half-widths. The concentration in Grad-CAM is what H1b independently predicts and is the reason the
+structural rule above is registered.
+
+#### H2b — the per-pixel-i.i.d. control cannot move under the defect it controls for
+
+For a per-pixel-i.i.d. attribution map the bottom *k* pixels are as random as the top *k*. Inverting the
+attribution ranking permutes which control pixels are removed and leaves the distribution of the result
+untouched. The control's reading is therefore **invariant to inversion of the ranking** — the single most
+likely implementation error a removal metric admits.
+
+This is not a thought experiment. This project ran its entire pilot with `curves._get_removal_mask`
+selecting the **lowest**-magnitude pixels: measured on continuous data with no ties, 0 of 52 selected
+pixels were in the top 52 by magnitude and all 52 were in the bottom 52. **All three of §6's
+pre-registered validity controls passed throughout**, because all three are random-attribution controls.
+The control read ≈0 before the fix (|·| ≤ 9e-5, A7) and ≈0 after it (per-scheme means +0.00002 to
++0.00007 under `curves-v3`, largest single cell +0.00017). A control whose reading cannot move under the
+defect it exists to catch is not a validity control for that defect. A7 records the retraction;
+`tasks/lessons.md` L5 records the rule and its cost.
+
+**What this registers.** At least one control in every faithfulness comparison must be **asymmetric under
+the metric's own ordering** — it must have a top and a bottom, so that inverting the selection moves it.
+`<name>_rolled` and `random_lowres_<g>` are; the per-pixel-i.i.d. control is not. This is a fourth
+validity control and belongs in §6. It is **recommended here and not made here**, on the same reasoning
+A8 applied to §4 row 1: the author approved a change to §2 and §4, and a §6 protocol change is not
+smuggled in alongside it. A9 lists it as outstanding before a freeze.
+
+---
+
+### H3 — the original question, asked with the corrected instrument
 
 **H3.** As input distribution shift severity increases, attribution faithfulness degrades faster than
 accuracy, and the severity at which faithfulness collapses is predicted by in-distribution calibration.
 
-Split into two independently testable parts. Both are primary; H3a passing and H3b failing is a reportable
-result, not a failure of the study.
+Unchanged in substance from the 2026-09-22 text. Split into the same two independently testable parts.
+Both are primary; H3a passing and H3b failing is a reportable result, not a failure of the study.
 
-### H3a — differential degradation rate
+#### H3a — differential degradation rate
 
 *Faithfulness declines with severity at a steeper normalised rate than accuracy.*
 
-- **Outcome:** `relative_faithfulness` = (removal AUC of a random-attribution control) − (removal AUC of
-  the explainer), per cell. Normalised to its clean-cell value within (model, seed).
-- **Comparator:** accuracy, normalised the same way within the same cell.
+- **Outcome:** `matched_faithfulness`, normalised to its clean-cell value within
+  (model, seed, imputation, explainer, control).
+  **Changed from `relative_faithfulness`** (A9). Justification: the registered outcome is a level computed
+  against a control of the wrong geometry, and the pilot's model-free ladder puts the artifact in that
+  level at up to 0.19932 — larger than any explainer effect the study has measured. A degradation *rate*
+  read off that level is a rate at which mask geometry's contribution changes with severity, which is not
+  what H3a claims. Nothing else about H3a changes.
+- **Comparator:** accuracy, normalised the same way within the same cell. **Unchanged.**
 - **Test:** mixed-effects model
   `normalised_metric ~ severity * metric_type + C(model) + C(shift_family) + (1 | seed)`,
-  where `metric_type ∈ {faithfulness, accuracy}`. H3a predicts a **negative** coefficient on the
-  `severity × metric_type[faithfulness]` interaction.
+  where `metric_type ∈ {faithfulness, accuracy}`. **Unchanged.** H3a predicts a **negative** coefficient
+  on the `severity × metric_type[faithfulness]` interaction.
 - **Decision rule:** supported if that interaction coefficient's 95% CI excludes zero in the predicted
-  direction after Holm correction within this research question.
+  direction after Holm correction within this research question. **Unchanged.**
+- **New refusal, forced by the new outcome.** Normalising to the clean cell is undefined when the clean
+  `matched_faithfulness` is within its own bootstrap half-width of zero: the ratio is then a ratio to
+  noise and its variance is unbounded. Any (model, seed, imputation, explainer, control) whose clean cell
+  fails that check is **excluded from H3a and reported as excluded, with its clean value and
+  half-width** — not rescued by a floor, a shrinkage constant or a change of normaliser after the fact.
+  The pilot's one candidate is `black` / integrated_gradients against `integrated_gradients_rolled`:
+  −0.00398 over 10 cells at 0.6 half-widths, with 1 of 10 cells beating its control. Whether its *clean
+  cell specifically* fails the check is not determined by the pilot output, which reports the 10-cell
+  mean.
+- **Each control reported separately.** Grad-CAM has two matched controls, `grad_cam_rolled` and
+  `random_lowres_4`, built independently — one keeps Grad-CAM's exact map and displaces it, the other
+  never sees the model. The fit is run once per (explainer, control) pair and every pair is reported. A
+  disagreement between a method's two controls is a result about the controls and is reported as one.
+  On the pilot the two agree to within 0.40 to 1.17 half-widths across all four schemes.
 
-### H3b — calibration predicts faithfulness onset
+#### H3b — calibration predicts faithfulness onset
 
-*In-distribution calibration predicts the severity at which an explainer stops beating its random control.*
+*In-distribution calibration predicts the severity at which an explainer stops beating a control of its
+own geometry.*
 
-- **Outcome (onset severity):** for each (model, seed, shift family), the smallest severity at which the
-  bootstrap 95% CI of `relative_faithfulness` includes zero. If no severity qualifies, the observation is
-  **right-censored** at the maximum severity run. Censoring is expected and is handled, not discarded.
+- **Outcome (onset severity):** for each (model, seed, shift family, explainer, control), the smallest
+  severity at which the bootstrap 95% CI of `matched_faithfulness` includes zero. If no severity
+  qualifies, the observation is **right-censored** at the maximum severity run. Censoring is expected and
+  is handled, not discarded.
+  **Changed from `relative_faithfulness`** (A9). Justification: the onset as registered was the severity
+  at which an explainer stopped beating a *per-pixel-i.i.d.* control, and a model-free blob drives that
+  quantity to −0.19932 without seeing a model, an image or a label. The registered onset was therefore a
+  statement about the severity at which mask geometry overwhelms the comparison. That is a property of the
+  mask, not of the explainer, and it is not what H3b claims to predict.
 - **Predictors:** in-distribution ECE and in-distribution AURC, measured on the clean cell of the same
-  (model, seed).
+  (model, seed). **Unchanged** — the calibration track is the one track neither instrument defect touched.
 - **Test:** Cox proportional-hazards model over onset severity with the two predictors, validated by
-  **leave-one-shift-family-out** — fit on four families, predict the fifth.
+  **leave-one-shift-family-out** — fit on four families, predict the fifth. **Unchanged.**
 - **Decision rule:** supported if the out-of-fold concordance index exceeds 0.6 and its bootstrap CI
   excludes 0.5. A model that cannot beat chance out-of-fold is reported as not predictive, regardless of
-  its in-sample fit.
+  its in-sample fit. **Unchanged.**
 - **Insufficient-events rule:** if fewer than 10 uncensored onset events are observed across the whole
   grid, H3b is declared untestable at this scale and reported as such. It is not rescued by loosening the
-  onset definition after the fact.
+  onset definition after the fact. **Unchanged.**
+- **Expected to be censored, said in advance.** On the pilot, Grad-CAM beats both of its matched controls
+  in 10 of 10 cells under all four schemes, and Integrated Gradients beats its own in 10 of 10 under
+  `blur`, `mean` and `uniform_noise`. No severity's matched CI includes zero in any of those arms, so
+  every pilot observation is right-censored and the pilot yields **zero uncensored onset events**. If
+  Version A behaves like the pilot, the insufficient-events rule fires and H3b is declared untestable at
+  this scale. That is registered here as the expected outcome, so that an H3b result, should one appear,
+  cannot be read as having been fished for — and so that its absence is a pre-registered finding rather
+  than a silence.
+
+---
+
+### Status of each hypothesis
+
+| Hypothesis | Status for Version A | Pilot evidence |
+|---|---|---|
+| H1a — artifact size | Confirmatory | Exploratory, generating. Seed 0: A − E positive in 3 of 4 schemes, negative under `blur` |
+| H1b — artifact scales with native resolution | Confirmatory, and **currently unrunnable** — `vit_tiny` is blocked | None. No ViT cell has ever been computed. The prediction rests on the ResNet-18 ladder alone |
+| H2a — raw and matched disagree in sign | Confirmatory | Exploratory, generating. Seed 0: 3 of 8 cells, all Grad-CAM |
+| H2b — the i.i.d. control cannot move under inversion | Not a hypothesis. A property of the control, demonstrated by a defect that occurred (A7, L5) | Established, not predicted |
+| H3a — differential degradation rate | Confirmatory, outcome changed by A9 | Not measured. §6's mixed model has been exercised on synthetic data only |
+| H3b — calibration predicts onset | Confirmatory, outcome changed by A9 | Exploratory: 0 uncensored events on seed 0 under every scheme |
 
 ---
 
@@ -100,14 +365,31 @@ Three parameters cannot be fixed before the P3 pilot. What is pre-registered is 
 the choice cannot be made to suit the results. Each is decided on pilot data only, recorded in this file
 by amendment, and frozen before any full-grid cell is filled.
 
+**Row 1's axis was replaced on 2026-10-15 by amendment A9, after the pilot, by an explicit decision of
+the author.** The rule it previously carried chose between two faithfulness metrics, only one of which
+was ever implemented, so it could not be executed on any data and never could have been. A9 states what
+was replaced, why, and why it is recorded as a rule change rather than as an application of the rule that
+stood. Read A9 before reading row 1. The superseded text is preserved there verbatim.
+
 | Parameter | Decision rule | Decided on |
 |---|---|---|
-| Primary faithfulness metric (ROAD-style vs single-deletion) | Whichever has the narrower bootstrap interval half-width relative to its clean→severity-5 change on pilot data. Tie → single-deletion, as the cheaper. | Pilot cells only |
+| **Faithfulness control** — per-pixel i.i.d. vs geometry-matched *(re-axed by A9)* | A control is **admissible** only if an arm that reads nothing from the model, the image or the label — constructed at the explainer's own native map resolution — reads within its own bootstrap half-width of zero against it. Among admissible controls the primary is the one whose half-width is the smaller fraction of its clean→severity-5 change. If neither is admissible, the removal metric is reported as invalid as a level and no primary is named. | Pilot cells only |
 | ViT-Tiny input resolution (112 / 160 / 224) | Lowest resolution whose clean accuracy falls within 1 point of the ResNet-18 baseline (E0). Escalate if none does. | Pilot cells only |
-| Attribution sample size (1000 vs 2000 images) | 1000 if the faithfulness interval half-width is under 10% of the clean→severity-5 change; otherwise 2000. | Pilot cells only |
+| Attribution sample size (1000 vs 2000 images) | 1000 if the faithfulness interval half-width is under 10% of the clean→severity-5 change; otherwise 2000. Read on the **matched** metric — `pilot_report.gate_verdicts(value_key="matched")` — not the raw one, per A8 and A9. | Pilot cells only |
 
-The secondary metric in each pair is still computed and reported in the E6 measurement-validity ablation.
-Choosing the primary does not discard the alternative.
+The secondary option in each pair is still computed and reported in the E6 measurement-validity ablation.
+Choosing the primary does not discard the alternative. On row 1 this is load-bearing rather than
+decorative: the raw-versus-matched contrast H2a tests is the difference of the two readings and needs
+both, which is why `configs/version_a.yaml` carries the pre-registered `random` arm alongside the matched
+controls.
+
+### Resolutions as of 2026-10-15
+
+| Row | Status | Recorded by |
+|---|---|---|
+| 1 — faithfulness control | **Resolved: geometry-matched.** Against the per-pixel-i.i.d. control, `random_lowres_4` — a model-free arm at Grad-CAM's own 4×4 resolution — reads −0.13929 (`black`), −0.15432 (`uniform_noise`), −0.12500 (`mean`) and +0.04112 (`blur`), which is 3.7 to 12.6 times its own half-width from zero in every scheme. The per-pixel-i.i.d. control is inadmissible. The geometry-matched control is primary; the per-pixel-i.i.d. reading continues to be computed and reported. **Caveat:** the geometry-matched control's own admissibility check is trivially satisfied for `random_lowres_4` against itself and has **not** been run against an independently seeded draw at the same grid. That non-trivial check is listed in A9 as outstanding. | A9 |
+| 2 — ViT-Tiny input resolution | **Unresolved, and now blocking a primary prediction.** No ViT-Tiny cell has ever been computed, so the rule's input — clean accuracy at 112 / 160 / 224 — does not exist. Two code-level blockers, verified in A9: `gradcam_target_layer` raises for any architecture without `layer4`, and `to_normalised_tensor` emits 32×32 while `vit_tiny` is built at `img_size=112`. 80 of Version A's 240 cells cannot run, and H1b — the geometry account's sharpest falsifiable prediction — cannot be tested at all until this row is decided. | A8, A9 |
+| 3 — attribution sample size | **Undecided. 1000 by default, not by the rule.** The raw-metric P3 gate passes 14 of 85 resolvable pairs and 12 of those 14 passes carry no correctly-aimed attribution, so it cannot carry a sample-size decision. The matched-metric gate now exists — `pilot_report.gate_verdicts(value_key="matched")`, printed as `P3 GATE (GEOMETRY-MATCHED)` — and **has not been run**: it does not appear in `docs/runs/2026-10-15_curves-v3_pilot_validity.log`. The decision waits on running it. A4 stands as the arithmetic of how half-widths scale; its ratios came from the voided curves and remain unusable. | A8, A9 |
 
 ---
 
@@ -494,3 +776,161 @@ exists to prevent. §2 is held, not forgotten.
 across-model variation, and §6's mixed-effects machinery has not been exercised on any of it. The
 geometry account rests on a single model's 4×4 Grad-CAM resolution, and whether the artefact scales
 the same way at other resolutions is untested.
+
+---
+
+| Date | Section | Change | Reason | Data seen at time of amendment |
+|---|---|---|---|---|
+| 2026-10-15 | §4, row 1 | **Axis replaced.** The pre-registered parameter is now the faithfulness **control** (per-pixel i.i.d. vs geometry-matched), not the faithfulness metric. Resolved in favour of geometry-matched | A9 | Full P3b validity grid under `curves-v3`, `resnet18` seed 0 only. No Version A cell filled |
+| 2026-10-15 | §2, whole section | **Rewritten.** H3a and H3b restated on `matched_faithfulness`; validity hypotheses H1a, H1b, H2a added as primary and H2b added as a requirement on the instrument | A9 | As above |
+| 2026-10-15 | §4, row 2 | Recorded as **unresolved and now blocking a primary prediction** (H1b) and 80 of Version A's 240 cells | A9 | As above |
+| 2026-10-15 | §4, row 3 | Unchanged from A8 — **undecided**. Records that the matched-metric gate now exists in code and has not been run | A9 | As above |
+| 2026-10-15 | §0, status header | Pointer to A9 added, and §0's confirmatory claim qualified with respect to the pilot | A9 | As above |
+
+**A9 — §4 row 1's axis is replaced by decision, and §2 is rewritten on the result.**
+
+A8 recommended re-axing §4 row 1 and explicitly declined to take the decision. **The author has now
+approved it.** This amendment executes it. Four things have to be said plainly, because the value of this
+log depends on their being said rather than inferred.
+
+**1. This is a rule being replaced after the data that would decide it were seen.** §4 licenses
+*applying* its rules to pilot data and recording the outcome by amendment. It does not license
+*replacing* a rule with a different one chosen after seeing the pilot, which is the post-hoc move §4
+exists to prevent. That is what is being done here. Calling it anything else would make this document
+worth less than no document.
+
+**2. It is an explicit, author-approved act, and it is not presented as an application of the rule that
+stood.** Row 1 as written chose between two *faithfulness metrics*. Row 1 as it now stands chooses
+between two *controls*. Those are different questions and no reading of the old rule produces the new
+one. The superseded text, preserved verbatim:
+
+```
+| Primary faithfulness metric (ROAD-style vs single-deletion) | Whichever has the narrower bootstrap
+interval half-width relative to its clean→severity-5 change on pilot data. Tie → single-deletion, as the
+cheaper. | Pilot cells only |
+```
+
+**3. No Version A cell has been filled.** A1 established that `git tag -l` is empty, that no
+`prereg-frozen` tag has ever been cut, and that §2–§7 are therefore not yet binding. Nothing here is a
+rewrite under full-grid data. That is what makes the change *permissible*; it is not what makes it
+*legitimate*, which is point 2.
+
+**4. The justification is that the registered rule was unexecutable from the day it was written — not
+that the author preferred its replacement's outcome.** Only one faithfulness metric has ever existed in
+this tree: a removal-curve AUC. `metrics/faithfulness.py` exposes `rank_features`, `removal_auc` and
+`relative_faithfulness`; there is no ROAD implementation and no single-deletion implementation anywhere
+in it. The rule had nothing to choose between on 2026-09-22 and nothing to choose between on 2026-10-15,
+and no quantity of data would have changed that. A rule that cannot be executed is not evidence that was
+overridden; it is a gap, and the replacement is justified by the gap. It is **not** justified by the
+geometry result being more favourable than the alternative — which is the suspicion a reader is entitled
+to hold, and the reason points 1 to 3 are stated before this one.
+
+**What the new rule resolves to, and on what.** The new rule asks whether a control admits an artifact:
+a control is admissible only if an arm reading nothing from the model, the image or the label, built at
+the explainer's own native map resolution, reads within its own half-width of zero against it. Applied to
+the pilot, `random_lowres_4` — Grad-CAM's own 4×4 resolution, no model input at any point — reads
+−0.13929 (`black`), −0.15432 (`uniform_noise`), −0.12500 (`mean`), +0.04112 (`blur`), at 3.7 to 12.6
+times its own half-width from zero in every scheme. The per-pixel-i.i.d. control is inadmissible. The
+geometry-matched control is primary. One honest gap in that application: the geometry-matched control's
+own admissibility check is trivially satisfied for `random_lowres_4` against itself and has never been
+run against an independently seeded draw at the same grid, which is the only form of the check that could
+fail. It is listed below as outstanding.
+
+**What §2 now says, and what each part is.** H3 is restated, not deleted: same two parts, same
+mixed-effects specification, same Cox model with leave-one-shift-family-out, same decision rules, same
+insufficient-events rule. The outcome moves from `relative_faithfulness` to `matched_faithfulness`, and
+that move forces exactly one new rule — H3a's refusal to normalise against a clean cell within its own
+half-width of zero. H1a, H1b and H2a are added as primary and confirmatory for Version A; H2b is added
+as a requirement on the instrument rather than a hypothesis, because the defect it describes has already
+occurred. Every pilot figure quoted in §2 is labelled exploratory and generating at the point it appears,
+with the number given, so a reader can reconstruct what was known when each hypothesis was written. That
+distinction is the whole purpose of this document and §2 now carries it explicitly rather than relying on
+§0.
+
+**One claim in the recommendation A8 made is narrowed here.** A8 wrote that the per-pixel-i.i.d. control
+"admits a model-free artefact of up to 0.2046, which is larger than any explainer effect measured here".
+That is true globally — 0.19932 against a largest matched explainer effect of 0.12083 and a largest raw
+explainer magnitude of 0.13321 — and it is **not** true scheme by scheme. Under `blur` the artifact at
+grid 2 is +0.04398 against a largest matched effect of +0.09648, roughly half. H1a is therefore
+registered per imputation scheme with the count of schemes reported, and is explicitly never pooled. The
+narrowing does not change the recommendation: `blur` is also the scheme under which the whole geometry
+ladder is flattest, spanning 0.0285 against 0.1615 to 0.2046 for the other three.
+
+**Newly blocked: multi-seed aggregation, and with it the seed replication every §2 hypothesis needs.**
+`pilot_report.require_one_model_and_seed` now refuses any set of faithfulness rows spanning more than one
+(model_id, seed). The refusal is correct, and it was added because both alternatives are silent:
+
+- `matched_rows` and `gate_verdicts` key their lookups on (explainer[, reference], imputation,
+  shift_family, severity), with neither `model_id` nor `seed` in the key, so across three seeds the last
+  one silently wins — 12 faithfulness rows over 3 seeds × 2 explainers × 2 cells collapse to 2 matched
+  rows where 6 are expected.
+- The averaging tables, the geometry ladder included, pool per-image values across seeds into a
+  within-seed bootstrap. Seeds are a variance component, not more images, so that reports a between-seed
+  effect inside a within-seed interval and returns a half-width that is too small — on the gate's own
+  statistic, which *is* a half-width.
+
+Aggregating across seeds correctly is §6's mixed-effects model, and it has not been implemented for
+faithfulness or exercised on any real data. The consequence:
+
+| Needs | Blocked by |
+|---|---|
+| H1a, H1b, H2a on more than one seed | §6 mixed-effects aggregation not implemented |
+| H3a's `(1 \| seed)` term | the same; §6's estimator ladder has run on synthetic data only |
+| H3b's uncensored-event count across seeds | the same |
+| P3b.4 — seeds 1 and 2 | the same |
+
+Every hypothesis in §2 is stated over (model, seed) and every one of them is currently measurable on
+exactly one (model, seed). This is the largest single gap between what §2 registers and what the
+instrument can do.
+
+**Also blocked, and now blocking a primary prediction: `vit_tiny`.** Both claims were verified in the
+code for this amendment rather than carried from A8:
+
+| Claim | Where | Consequence |
+|---|---|---|
+| `gradcam_target_layer` raises for any architecture without `layer4` | `models/vision.py`: returns `model.layer4[-1]` behind `hasattr(model, "layer4")`, otherwise raises `ValueError` | `grad_cam` and `grad_cam_rolled` cannot run on a ViT |
+| `to_normalised_tensor` emits 32×32 while `vit_tiny` is built at `img_size=112` | `data/cifar.py` converts `(N, 32, 32, 3)` uint8 to `(N, 3, 32, 32)` and never resizes; `models/vision.py` builds `timm`'s `vit_tiny_patch16_224` with `img_size=112` | **no** stage runs on `vit_tiny`, not merely the Grad-CAM arms |
+
+`configs/version_a.yaml` is 3 models × 5 seeds × (1 clean + 5 families × 3 severities) = 240 cells, so
+`vit_tiny` is 80 of them and none can run. H1b is the sharpest falsifiable prediction in §2 and it is the
+one hypothesis there that cannot be executed at all today. §4 row 2 is the decision that unblocks it.
+
+**Left standing, and listed rather than fixed: §3, §6 and §8 still describe the retired outcome.** The
+author approved a change to §2 and §4. The following inconsistencies are created or exposed by it and are
+recorded now so that none of them is discovered during the Version A analysis:
+
+| Where | What it says | Why it is now wrong |
+|---|---|---|
+| §3 S1 | "After regressing out accuracy change, faithfulness change and calibration change remain correlated" | Inherits §2's outcome, which is no longer `relative_faithfulness`. Under the matched metric the regressand is a difference of two readings and inherits H3a's new normalisation refusal |
+| §3 S2 | "Attribution stability and faithfulness do not degrade at the same rate" | Same inheritance. Stability is unaffected by A7 and A9; faithfulness is not |
+| §3 S3 | Temperature scaling and AugMix "change faithfulness or stability" | Same inheritance, plus a separate defect: `train_model` took `augmix: bool = False` and no caller ever set it, so `resnet18_augmix` trained **identically** to `resnet18` and the two differed only in their cache key. S3 would have compared a model against itself at roughly 5.5 GPU-h. Fixed at commit 4348f0c — AugMix is now derived from the model id via `models.vision.uses_augmix`, read in `train.py` — but no `resnet18_augmix` checkpoint has ever been trained with AugMix, and `configs/version_a.yaml`'s budget block still states the pre-fix situation |
+| §6, validity control 1 | "Faithfulness is **always** reported relative to a random-attribution control... `relative_faithfulness()` raises if the control is absent" | Still satisfied in letter — `matched_faithfulness` is a difference of two `relative_faithfulness` values and the raw control cancels exactly — but the words name the control the pilot disqualified. The fourth control H2b requires, asymmetry under the metric's own ordering, is missing |
+| §8, falsifier | "if `relative_faithfulness` is indistinguishable from zero at *every* severity" | Names the retired quantity. On the matched metric the premise is not in doubt on seed 0: explainers beat their geometry-matched controls in 11 of 12 comparisons at 7.3 to 10.4 half-widths, the one exception being `black`/IG at 0.6, reported as unresolved |
+| §7 | 240 primary cells | 80 of them cannot run |
+
+None of these is amended here. Each is a change that was not approved, and inventing approval for it
+inside the same amendment that insists on recording an approved change *as* approved would be
+self-defeating.
+
+**Nothing in A8 is retracted.** A9 narrows one claim in A8's recommendation (above) and executes the
+decision A8 referred to the author. A8's reinstatements, withdrawals and the `black`/IG unresolved row
+all stand as written. A7's retraction of A2 and A3 stands. A4, A5 and A6 stand.
+
+**Not frozen. No `prereg-frozen` tag is cut by this amendment.** `git tag -l` remains empty. What stands
+between here and a tag:
+
+| Before a tag can be cut | Status |
+|---|---|
+| §4 row 2 decided — `vit_tiny` fixed or dropped | Open. Blocks H1b and 80 of 240 cells |
+| §4 row 3 decided — the matched-metric gate run and read | Open. `gate_verdicts(value_key="matched")` exists in code and has never been run |
+| §6 multi-seed aggregation implemented | Open. Blocks every §2 hypothesis beyond one seed, and P3b.4 |
+| §6 validity controls amended to require an asymmetric control | Open. Recommended by H2b, not made here |
+| §3 and §8 restated on the matched outcome | Open. See the table above |
+| Version A's imputation axis settled | Open. One scheme reduces H1a's per-scheme count to a count out of 1, and cannot exhibit the across-scheme raw sign flip at all. Adding `blur` costs about +3.39 GPU-h on this grid |
+| The geometry-matched control's non-trivial admissibility check | Open. Never run against an independently seeded draw at the same grid |
+| Seeds 1 and 2 (P3b.4) | Open, and blocked by the multi-seed row above |
+
+**Single-seed caveat, unchanged.** Everything §2 quotes from the pilot is `resnet18`, seed 0, 1000
+images, three shift families: one architecture, one seed, one dataset. The geometry account still rests
+on a single model's 4×4 Grad-CAM resolution. H1b exists precisely because that is a weakness, and H1b is
+the hypothesis that cannot currently be run.

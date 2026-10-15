@@ -73,16 +73,23 @@
 #   - vit_tiny has never been trained or run. No training, predict or
 #     attribution time exists for it. The 16.68 h line assumes it costs what
 #     resnet18 costs; no multiplier is invented in place of a measurement.
-#     Two hard blockers besides cost: `gradcam_target_layer` raises for any
-#     architecture without `layer4`, so grad_cam and grad_cam_rolled cannot run
-#     on it at all; and `to_normalised_tensor` emits 32x32 while `vit_tiny` is
-#     built at img_size=112, which prereg section 4 row 2 also leaves undecided.
+#     Two hard blockers besides cost, and they stop MORE than the Grad-CAM
+#     arms: `gradcam_target_layer` raises for any architecture without
+#     `layer4`, and `to_normalised_tensor` emits 32x32 while `vit_tiny` is
+#     built at img_size=112 with no resize anywhere in the data path -- so the
+#     forward pass is rejected and the PREDICT stage fails too, not just
+#     attribution. No stage runs on vit_tiny. Prereg section 4 row 2 is
+#     unresolved and, per A9, now blocks H1b, the geometry account's sharpest
+#     prediction: the artifact should scale with native map resolution, which
+#     is 4x4 for this ResNet-18 and 7x7 for ViT-Tiny at patch16/112.
 #   - resnet18_augmix has never been run either, though it is the same
 #     architecture (`build_model` maps both to `resnet18_cifar`), so its
 #     per-epoch forward/backward cost is identical and only AugMix's CPU-side
-#     augmentation is unmeasured. Separately: `load_or_train` never passes
-#     `augmix=True`, so as the code stands this arm trains exactly like
-#     `resnet18` and secondary hypothesis S3 cannot be tested from it.
+#     augmentation is unmeasured. It now genuinely trains with AugMix as of
+#     4348f0c -- until then `load_or_train` never passed `augmix=True` and the
+#     arm was `resnet18` under another name -- so S3 is testable, but no
+#     AugMix checkpoint exists yet and the cost of that augmentation is still
+#     unmeasured.
 #   - T and P are one residual, carried as an interval.
 #   - One run on one T4. No repeat timings, so no jitter estimate.
 #
