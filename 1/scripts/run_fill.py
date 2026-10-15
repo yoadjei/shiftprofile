@@ -15,7 +15,7 @@ sys.path itself, from its own location, and calls the same main().
 It also fills in the Kaggle paths, so the whole run is one short line with no shell
 continuations to get mangled:
 
-    !python /kaggle/working/shiftprofile/scripts/run_fill.py
+    !python /kaggle/working/shiftprofile/1/scripts/run_fill.py
 
 Any flag passed explicitly wins over the default, so the same script drives a local
 CPU run:

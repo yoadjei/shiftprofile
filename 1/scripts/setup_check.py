@@ -8,8 +8,8 @@ importing it as a notebook and the kernel tries to execute `null` as Python.
 On Kaggle, paste this into one cell of a blank notebook:
 
     !git clone --depth 1 https://github.com/yoadjei/shiftprofile.git /kaggle/working/shiftprofile
-    !pip install -q -e /kaggle/working/shiftprofile
-    !python /kaggle/working/shiftprofile/scripts/setup_check.py
+    !pip install -q -e /kaggle/working/shiftprofile/1
+    !python /kaggle/working/shiftprofile/1/scripts/setup_check.py
 
 Every check that fails prints what to do about it, and the script exits non-zero
 so a failure cannot be mistaken for a pass scrolled off the top.

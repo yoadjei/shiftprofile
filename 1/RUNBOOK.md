@@ -118,8 +118,8 @@ attached, paste one cell:
 !rm -rf /kaggle/working/shiftprofile
 !git clone --depth 1 https://github.com/yoadjei/shiftprofile.git /kaggle/working/shiftprofile
 !git -C /kaggle/working/shiftprofile log --oneline -1
-!pip install -q -e /kaggle/working/shiftprofile
-!python /kaggle/working/shiftprofile/scripts/setup_check.py
+!pip install -q -e /kaggle/working/shiftprofile/1
+!python /kaggle/working/shiftprofile/1/scripts/setup_check.py
 ```
 
 It ends in `READY` or `NOT READY`, prints a specific fix under each failure, and exits
@@ -138,7 +138,7 @@ fill re-downloads CIFAR-10 — which has been observed to take 35 minutes at 80 
 Continue in the notebook where the setup check already fetched it:
 
 ```python
-!python /kaggle/working/shiftprofile/scripts/run_fill.py
+!python /kaggle/working/shiftprofile/1/scripts/run_fill.py
 ```
 
 The Kaggle paths are the script's defaults; pass a flag to override any of them, and an

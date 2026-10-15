@@ -18,7 +18,7 @@ Invocation mirrors `scripts/run_fill.py`: it puts the repo root on `sys.path`
 from its own location, so it does not depend on `pip install -e` having
 registered against whichever interpreter a notebook `!` line resolves to.
 
-    !python /kaggle/working/shiftprofile/scripts/pilot_report.py
+    !python /kaggle/working/shiftprofile/1/scripts/pilot_report.py
 
 Any flag wins over the default, so the same script runs locally:
 

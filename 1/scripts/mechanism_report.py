@@ -40,7 +40,7 @@ reported as a property of the whole curve.
 
 Invocation mirrors `scripts/pilot_report.py`.
 
-    !python /kaggle/working/shiftprofile/scripts/mechanism_report.py
+    !python /kaggle/working/shiftprofile/1/scripts/mechanism_report.py
 """
 
 from __future__ import annotations
