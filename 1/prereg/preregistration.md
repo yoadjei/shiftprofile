@@ -350,3 +350,147 @@ amended to say so, and the function now has the five tests it never had.
 touches no curve, and whose clean-to-severity-5 ladder stands. Void pending recomputation: every
 faithfulness, gate and rank result. The §2 revision remains unwritten, which in hindsight is the one
 procedural decision in this sequence that paid for itself.
+
+---
+
+| Date | Section | Change | Reason | Data seen at time of amendment |
+|---|---|---|---|---|
+| 2026-10-15 | §9, entry A7 | A7's "void pending recomputation" is **resolved**. The grid was recomputed under `curves-v3`; which withdrawals are reinstated and which stand is recorded below | A8 | Full P3b validity grid under `curves-v3`: 510 units, 0 failed, 7325.1s |
+| 2026-10-15 | §4, row 1 (primary faithfulness metric) | Recorded as **not executable as written**: the pair it chooses between was never built. An amendment is recommended and awaits the author; none is made here | A8 | As above |
+| 2026-10-15 | §4, row 3 (attribution sample size) | Recorded as **not decidable** from the present gate. Left at 1000 by default, as undecided rather than chosen | A8 | As above |
+
+**A8 — the grid was recomputed, and A7's "void" resolves three ways, not one.**
+The inverted-mask fix shipped as `curves-v3` and the whole P3b validity grid was rerun: 510 units,
+0 failures, 7325.1s. `resnet18`, seed 0, 1000 images, 10 cells (clean + 3 families × 3 severities),
+4 imputation schemes, 10 explainer arms. A7 declared every faithfulness, gate and rank result "void
+pending recomputation". Some of it is reinstated in corrected form, some is reinstated only as an
+observation with its interpretation withdrawn, and some stays withdrawn.
+
+**Reinstated in corrected form: the geometry ladder.** `random_lowres_<grid>` is model-free by
+construction — noise on a grid × grid lattice, upsampled the way Grad-CAM's 4×4 map is. It is
+monotone from grid 2 to grid 16 under all four schemes, and the grid-2-to-grid-32 span is 0.2046
+(`black`), 0.1852 (`uniform_noise`), 0.1615 (`mean`) and 0.0285 (`blur`). A model-free coarse blob
+reads **−0.19932** under `black`. That is the full magnitude of the apparent unfaithfulness the raw
+metric reports for real explainers, produced by mask shape alone with no model input at any point.
+
+**Reinstated in corrected form: the geometry-matched comparison, which is now the working
+instrument.** An explainer minus a control of the same mask geometry is positive in 11 of 12
+comparisons:
+
+| imputation | grad_cam − grad_cam_rolled | grad_cam − random_lowres_4 | IG − IG_rolled |
+|---|---|---|---|
+| `mean` | +0.11523 (9.3 half-widths) | +0.10078 (8.7) | +0.07389 (9.1) |
+| `blur` | +0.09648 (8.7) | +0.09209 (8.8) | +0.07100 (7.3) |
+| `black` | +0.10068 (8.6) | +0.09194 (8.5) | −0.00398 (0.6, **unresolved**) |
+| `uniform_noise` | +0.12083 (10.4) | +0.11050 (10.2) | +0.04855 (7.6) |
+
+Every cell except `black`/IG is 10 of 10 cells beating its matched control. The two controls are
+independent in construction — one keeps Grad-CAM's exact map and displaces it, the other never sees
+the model — and they agree to within 0.40 to 1.17 half-widths across all four schemes. The `black`/IG
+row is the one unresolved comparison: at 0.6 half-widths it is neither a pass nor a failure, and it is
+reported as unresolved rather than rounded to either.
+
+**Reinstated as an observation, withdrawn as a finding: A3.** Against the pre-registered
+per-pixel-i.i.d. control, Grad-CAM still reads **negative** under three of four schemes — −0.04735
+(`black`), −0.02421 (`mean`), −0.04382 (`uniform_noise`) — and positive only under `blur`
+(+0.13321). So the raw reading that prompted A3 does reproduce for Grad-CAM, and under `black` and
+`uniform_noise` it is negative beyond its own half-width at every severity. A3's **quantities** do
+not reproduce: it reported 79 of 80 attribution measurements failing to clear zero at 2.2 to 25.6
+half-widths, where the corrected run puts 36 of those 80 cells above zero. And A3's **reading** is
+withdrawn outright. It took the negative sign to be a property of the explainers. It is a property of
+the control: a per-pixel-i.i.d. control does not hold mask geometry fixed, and matching the control on
+geometry reverses the sign in three of four schemes on the same attributions and the same images.
+
+**Still withdrawn: A2's ranking reversal, and the "anti-faithfulness" of Grad-CAM.** Grad-CAM beats
+both of its matched controls under all four schemes, at 8.5 to 10.4 half-widths; there is no
+anti-faithfulness to explain. A2's ratio table (Grad-CAM : IG at 0.91 under `blur` rising to 11.95
+under `black`) does not reproduce and cannot even be restated on the corrected data: the two
+explainers' raw means have opposite signs under two of the four schemes, so the ratio is not defined.
+On the matched metric there is no ranking reversal at all — Grad-CAM's margin over its own geometry
+control exceeds IG's margin over its own under every scheme.
+
+**A2's imputation-dependence survives, but it is now a different finding.** As written, A2 said the
+imputation scheme reverses the *ranking of the explainers* and the *sign of degradation with
+severity*. Both of those are artefacts of the inverted mask and stay withdrawn. What survives is
+narrower and sharper: the scheme reverses the sign of the **raw** metric (Grad-CAM, +0.13321 under
+`blur` against negative under the other three), while the **matched** metric agrees in sign across
+all four schemes and no matched comparison is negative beyond its half-width. The axis on which the
+conclusion flips is therefore the **control**, not the imputation and not the explainer ranking.
+Imputation still matters — it sets the size of the geometry artefact, 0.2046 under `black` against
+0.0285 under `blur` — but it is no longer where the conclusion changes.
+
+**§8 rows 4 and 5 fire again, on corrected data.** Row 4, *"faithfulness intervals exceed the
+effect"*: the P3 gate passes 14 of 85 resolvable pairs. Row 5, *"conclusions flip with faithfulness
+metric choice"*: the sign flips between the raw and the matched metric in three of four schemes.
+The control is part of the metric's definition — §6's first validity control says faithfulness is
+*always* reported relative to a control — so a change of control is a change of metric. Both rows
+were registered in advance, which is what §8 was for.
+
+**Independent confirmation that the matched instrument reads aim, not shape.** TEST 1 of the
+mechanism report displaces an attribution map by increasing amounts and asks whether displacing it
+further costs more. Grad-CAM's advantage over its own displaced copy grows from −0.04357 at 5.73 px
+to −0.18904 at 17.90 px under `mean` (4.3×) and from −0.03410 to −0.15359 under `blur` (4.5×),
+against half-widths of about 0.0095. IG grows 1.7× under both. A map that merely had the right
+*shape* would be penalised flatly by displacement; this one is penalised in proportion to how far it
+is moved, which is a statement about where it points. (Caveat for anyone reading that log: its verdict
+column prints "SHRINKS with displacement" on all four rows, which is the opposite of the measurement.
+It compared signed swing, and `gain` is negative precisely in the working case. The label is fixed in
+the code at 77781e8; the log predates the fix.)
+
+**§4 row 1 cannot be executed as written.** It names a choice between a "ROAD-style" and a
+"single-deletion" faithfulness metric, with a decision rule over the pair. Only one faithfulness
+metric exists in the code: a removal-curve AUC. `metrics/faithfulness.py` exposes `rank_features`,
+`removal_auc` and `relative_faithfulness`, and no ROAD or single-deletion implementation exists
+anywhere in the tree. The pair was never built, so the rule has nothing to choose between, and §4's
+closing sentence — "the secondary metric in each pair is still computed and reported in the E6
+measurement-validity ablation" — describes an artefact that does not exist.
+
+**Recommendation on §4 row 1 — requiring the author's approval, not a decision taken here.** Replace
+the axis. Make the pre-registered choice the **control** — per-pixel-i.i.d. versus geometry-matched —
+rather than two removal metrics that were never implemented. The recommendation is made because the
+data decide that axis decisively where they cannot decide the registered one: the per-pixel-i.i.d.
+control admits a model-free artefact of up to 0.2046, which is larger than any explainer effect
+measured here, while the geometry-matched control separates explainer from control at 8.5 to 10.4
+half-widths in 11 of 12 comparisons. This amendment does **not** make that change, and the
+distinction matters. §4 licenses *applying* its rules to pilot data and recording the outcome by
+amendment; it does not license *replacing* a rule with a different one chosen after seeing the data
+that would decide it, which is the post-hoc move §4 exists to prevent. No Version A cell has been
+filled (A1), so nothing is being rewritten under full-grid data — but the rule change still has to be
+an explicit, author-approved act on the record, not an amendment that looks like an application. The
+choice between amending §4, implementing the missing metric, and deleting the row belongs to the
+author. It is recorded here so the gap is on the record whichever way it goes.
+
+**§4 row 3 is not decidable from this gate, and is not decided.** The P3 gate fails at 14 of 85
+resolvable pairs, and the composition of the 14 is the reason it cannot carry a sample-size decision:
+
+| what passes | count |
+|---|---|
+| model-free `random_lowres_*` arms | 9 |
+| `grad_cam_rolled` — a real map, displaced off its target | 3 |
+| a correctly-aimed explainer (`black`/grad_cam, `mean`/grad_cam) | 2 |
+
+All 14 passes are `gaussian_noise`; `blur` passes nothing. The gate is computed on the **raw** metric,
+against the per-pixel-i.i.d. control that A8 has just shown to be the defective one. A gate whose
+passes are 12/14 arms carrying no correctly-aimed attribution is reporting how sharply a corruption
+moves the removal curve, not how precisely a faithfulness claim can be made. §4's 1000-vs-2000 rule is
+therefore recorded as **undecided**: the sample size stays at 1000 by default, not by the rule. A
+matched-metric gate is being added separately; the decision waits on it. A4 stands unchanged as the
+arithmetic of how half-widths scale, and its ratios, which came from the voided curves, remain
+unusable.
+
+**Calibration is unchanged, as it has been across every run.** Accuracy 0.8610 → 0.5487, Brier
+0.2166 → 0.6810, ECE_em 0.0516 → 0.2514, ECE_db 0.0764 → 0.2650, AURC 0.0315 → 0.2702, over
+severities 0, 1, 3, 5. It is computed from predictions and reads no curve, which is why A7 did not
+touch it and why it is the one track to have come through two instrument defects intact.
+
+**§2 is still not rewritten, and that is deliberate.** A7 called holding it the one procedural
+decision in the sequence that paid for itself, and the reasons to hold it have not expired: the §4
+metric decision above is a recommendation awaiting the author, and the matched-metric gate has not
+reported. Revising the hypotheses before both land would be exactly the post-hoc move this document
+exists to prevent. §2 is held, not forgotten.
+
+**Single-seed caveat, unchanged and applying to everything above.** All of it is `resnet18`, seed 0,
+1000 images: one architecture, one seed, one dataset. Nothing here is a claim about across-seed or
+across-model variation, and §6's mixed-effects machinery has not been exercised on any of it. The
+geometry account rests on a single model's 4×4 Grad-CAM resolution, and whether the artefact scales
+the same way at other resolutions is untested.
