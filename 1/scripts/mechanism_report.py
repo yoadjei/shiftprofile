@@ -294,9 +294,11 @@ def fraction_profile(cells, cache, *, pairs, imputations, indices,
 def _print_report(displacement, geometry, profile) -> None:
     print()
     print("=" * 74)
-    print("TEST 1   does rolling FURTHER help more?")
+    print("TEST 1   does displacing the map FURTHER cost more?")
     print("         gain = faithfulness(rolled) - faithfulness(explainer)")
-    print("         growing with displacement = reading (b); flat = reading (a)")
+    print("         gain < 0 means the explainer beats its own displaced copy;")
+    print("         |gain| growing with distance means its aim is spatially")
+    print("         specific, not merely a differently shaped mask")
     print("=" * 74)
     print(f"{'imputation':<15} {'explainer':<22} {'displ_px':>8}  {'gain':>9}  "
           f"{'half_w':>8}  {'n':>5}")
@@ -313,16 +315,28 @@ def _print_report(displacement, geometry, profile) -> None:
             if len(sub) < 2:
                 continue
             first, last = sub[0], sub[-1]
-            swing = last["gain"] - first["gain"]
             bar = max(first["half_width"], last["half_width"])
+
+            # MAGNITUDES, not signed values. `gain` is negative whenever the
+            # explainer beats its displaced copy, which is the working case, so
+            # an advantage growing from -0.034 to -0.154 is a signed swing that
+            # goes DOWN. Comparing the signed values printed "SHRINKS with
+            # displacement" over a 4.5x growth in the effect -- the exact
+            # opposite of the result, on all four rows. The comparison was
+            # written when an inverted removal mask made `gain` positive, and it
+            # outlived the arithmetic it was correct for.
+            swing = abs(last["gain"]) - abs(first["gain"])
+            direction = "beats" if last["gain"] < 0 else "loses to"
             verdict = (
-                "GROWS with displacement -> (b)" if swing > bar
-                else "SHRINKS with displacement" if swing < -bar
-                else "FLAT in displacement -> (a)"
+                f"advantage GROWS with distance ({direction} its copy)"
+                if swing > bar
+                else f"advantage SHRINKS with distance ({direction} its copy)"
+                if swing < -bar
+                else "FLAT: displacing anywhere costs the same"
             )
             print(f"  {imputation:<15} {explainer:<22} "
                   f"{first['gain']:+.5f} -> {last['gain']:+.5f}  "
-                  f"swing {swing:+.5f} vs half-width {bar:.5f}   {verdict}")
+                  f"|swing| {swing:+.5f} vs half-width {bar:.5f}   {verdict}")
 
     print()
     print("=" * 74)

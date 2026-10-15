@@ -20,6 +20,7 @@ if str(REPO_ROOT / "scripts") not in sys.path:
 
 from mechanism_report import (  # noqa: E402
     MASK_FRACTION,
+    _print_report,
     mask_geometry,
     roll_displacements,
 )
@@ -145,3 +146,48 @@ class TestMaskGeometry:
 
         # The top rows win on magnitude, so the centroid sits near row 0.5.
         assert centre[0] == pytest.approx(np.hypot(0.5 - 15.5, 15.5 - 15.5), abs=0.5)
+
+
+class TestTheDisplacementVerdictReadsTheRightDirection:
+    """The printed label, which once said the opposite of the measurement.
+
+    `gain = faithfulness(rolled) - faithfulness(explainer)` is NEGATIVE whenever
+    the explainer beats its displaced copy, which is the working case. So an
+    advantage growing from -0.034 to -0.154 is a signed swing that goes DOWN,
+    and comparing signed values printed "SHRINKS with displacement" over a 4.5x
+    growth in the effect -- on all four rows of a real run. The comparison was
+    written when an inverted removal mask made `gain` positive, and it outlived
+    the arithmetic that made it correct.
+    """
+
+    def _verdict(self, capsys, points):
+        rows = [
+            {"imputation": "mean", "explainer": "grad_cam", "displacement": d,
+             "gain": g, "half_width": 0.009, "n": 2000}
+            for d, g in points
+        ]
+        _print_report(rows, [], [])
+        lines = capsys.readouterr().out.splitlines()
+        return next(ln for ln in lines
+                    if "advantage" in ln or "FLAT" in ln)
+
+    def test_a_deepening_negative_gain_reads_as_a_growing_advantage(self, capsys):
+        """The real measurement: -0.044 at 5.7px to -0.189 at 17.9px."""
+        line = self._verdict(capsys, [(5.7, -0.04357), (17.9, -0.18904)])
+        assert "GROWS" in line, line
+        assert "beats its copy" in line
+
+    def test_a_shrinking_negative_gain_reads_as_a_shrinking_advantage(self, capsys):
+        line = self._verdict(capsys, [(5.7, -0.18904), (17.9, -0.04357)])
+        assert "SHRINKS" in line, line
+
+    def test_a_growing_positive_gain_reads_as_losing_to_the_copy(self, capsys):
+        """What the inverted-mask run produced. Still has to be labelled
+        correctly, because this is the shape that says the metric is broken."""
+        line = self._verdict(capsys, [(5.7, +0.04), (17.9, +0.15)])
+        assert "GROWS" in line, line
+        assert "loses to its copy" in line
+
+    def test_a_change_inside_the_half_width_is_flat(self, capsys):
+        line = self._verdict(capsys, [(5.7, -0.050), (17.9, -0.053)])
+        assert "FLAT" in line, line
