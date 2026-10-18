@@ -1,12 +1,24 @@
 # Run logs
 
-Three parts, and they must not be mixed. **Part 1** is the VOID runs, kept for
-provenance; every faithfulness figure in it is wrong. **Part 2** is the first
-corrected run under `curves-v3`. **Part 3** is session 1 of the three planned
-Kaggle sessions -- the same computation re-run at commit `34e351a`, with the
-geometry-matched gate added -- and is the one to cite. Part 3 reproduces Part 2
-bit-for-bit, so Part 2 is superseded rather than retracted, and is kept for
-provenance.
+Four parts, and they must not be mixed.
+
+- **Part 1 — VOID.** The `curves-v1`/`curves-v2` runs, kept for provenance only.
+  Every faithfulness, gate, ladder and matched-control figure in it is wrong.
+  Cite nothing from it.
+- **Part 2 — the first corrected run** under `curves-v3`. Superseded by Part 3,
+  which reproduces it bit-for-bit, so it is kept rather than retracted. Read it
+  for the history of the correction, not for figures.
+- **Part 3 — seed 0, commit `34e351a`.** The full single-seed result, with the
+  geometry-matched gate. This is where each quantity is defined, where the
+  gate's failure is worked out in detail, and where the per-pair degradation
+  table lives. Read it for what the instrument measures.
+- **Part 4 — seeds 1 and 2, commit `bf477ec`.** The pre-registered three-seed
+  replication (P3b.4), reported as a cross-seed summary over all three seeds.
+  Read it for what holds across seeds and what does not.
+
+**Parts 3 and 4 together are what to cite.** Part 3 is the single-seed detail;
+Part 4 is the replication and the only place where cross-seed stability, and
+H1a's unresolved primary-scheme test, are stated.
 
 ---
 
@@ -2476,5 +2488,1564 @@ TEST 3   where in the removal curve the gap lives
         0.90     0.1128     0.1196   -0.0068
         1.00     0.1122     0.1122   +0.0000
     peak gap at fraction 0.10 (-0.1812)
+
+==========================================================================
+
+---
+
+## Part 4 — VALID: the three-seed replication (P3b.4)
+
+**2026-10-18, commit `bf477ec`. Parts 3 and 4 together are what to cite.** Sessions
+2 and 3 of the three planned Kaggle sessions, run as P3b.4's pre-registered
+replication with `--seeds 1` and `--seeds 2`. Same config
+(`configs/pilot_validity.yaml`), same model, same 1000 committed evaluation
+indices, same 10 cells, 4 imputation schemes and 10 explainer arms as Part 3.
+Only the seed changed.
+
+| | seed 0 (Part 3) | seed 1 | seed 2 |
+|---|---|---|---|
+| commit | `34e351a` | `bf477ec` | `bf477ec` |
+| units | 510, 0 failed | 510, 0 failed | 510, 0 failed |
+| elapsed | 8713.3s | 8854.9s | 9065.7s |
+| CIFAR-10 download in-session | 51:15 | 1:00:44 | 1:01:00 |
+| epoch 1 / epoch 50 training loss | 1.5867 / 0.0016 | 1.5910 / 0.0017 | 1.5901 / 0.0016 |
+
+Part 3 is where each quantity is defined and where the single-seed result is
+worked out. Part 4 reports only what the three seeds say together. Every figure
+below is read from the three logs named at the head of each subsection; the two
+new logs are reproduced in full at the end of this part.
+
+The seed axis did move. Grad-CAM's mask spread is 3.298, 3.298 and 3.295 and its
+displaced copy's is 6.150, 6.188 and 6.170, so the three runs are three different
+trained models; the model-free arms' spreads are identical to three decimals in
+all three logs (`random_lowres_2` 3.967, `random_lowres_4` 6.511,
+`random_lowres_8` 10.897), which is what an arm that reads neither model nor image
+nor label should do.
+
+### Matched faithfulness replicates: 11 of 12 cells positive and resolved in all three seeds
+
+From `GEOMETRY-MATCHED FAITHFULNESS` in each log.
+
+| imputation | pair | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|---|
+| `black` | grad_cam vs grad_cam_rolled | +0.10068 | +0.09844 | +0.09682 |
+| `black` | grad_cam vs random_lowres_4 | +0.09194 | +0.08703 | +0.08602 |
+| `black` | IG vs IG_rolled | -0.00398 | -0.00554 | -0.00328 |
+| `blur` | grad_cam vs grad_cam_rolled | +0.09648 | +0.09681 | +0.09676 |
+| `blur` | grad_cam vs random_lowres_4 | +0.09209 | +0.09011 | +0.09094 |
+| `blur` | IG vs IG_rolled | +0.07100 | +0.07172 | +0.07084 |
+| `mean` | grad_cam vs grad_cam_rolled | +0.11523 | +0.11930 | +0.11554 |
+| `mean` | grad_cam vs random_lowres_4 | +0.10078 | +0.10204 | +0.09337 |
+| `mean` | IG vs IG_rolled | +0.07389 | +0.07790 | +0.07756 |
+| `uniform_noise` | grad_cam vs grad_cam_rolled | +0.12083 | +0.12249 | +0.12748 |
+| `uniform_noise` | grad_cam vs random_lowres_4 | +0.11050 | +0.11004 | +0.11395 |
+| `uniform_noise` | IG vs IG_rolled | +0.04855 | +0.05236 | +0.05194 |
+
+**What replicated:** 11 of the 12 (scheme, pair) cells are positive and resolved
+in every seed, at 7.3 to 10.6 of their own bootstrap half-widths from zero, and
+all 11 carry the verdict `10/10 cells beat it` in all three logs. The corrected
+instrument's level statement -- an explainer beats a control of its own mask
+geometry -- holds on three independent trainings.
+
+**What did not:** `black`/IG, and it is the same cell every time. It is slightly
+negative in all three seeds and unresolved in all three, at 0.62, 0.87 and 0.55
+half-widths below zero. It is *consistently* unresolved rather than unstable: the
+three point estimates span 0.00226, about a third of the cell's own bootstrap
+half-width. The only thing that moves is the per-cell count in the verdict column --
+`1/10 cells beat it` under seed 0, `NO CELL BEATS ITS MATCHED CONTROL` under
+seeds 1 and 2 -- which is one cell of ten changing side on a quantity whose
+interval covers zero.
+
+### The geometry ladder replicates: 12 of 12
+
+From `GEOMETRY LADDER` in each log. `random_lowres_<g>` is noise on a g x g lattice
+upsampled as Grad-CAM is; no model, image or label enters it.
+
+| imputation | span grid 2 -> 32, seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| `black` | 0.2046 | 0.2027 | 0.2017 |
+| `uniform_noise` | 0.1852 | 0.1829 | 0.1799 |
+| `mean` | 0.1615 | 0.1516 | 0.1572 |
+| `blur` | 0.0285 | 0.0300 | 0.0251 |
+
+Monotone toward zero from grid 2 to grid 16 in all four schemes in all three
+seeds -- **12 of 12**. Grid 32 breaks monotonicity under `blur` and only under
+`blur`, in all three seeds, exactly as it did under seed 0. A model-free arm's
+score is a function of how coarse its mask is, and that function is stable across
+trainings.
+
+### Raw and matched disagree in sign in the same three cells, in all three seeds
+
+Per (scheme, explainer), the sign of the mean `faithfulness` arm from the
+`FAITHFULNESS` summary against the sign of the matched reading above. Eight cells:
+four schemes x two explainers.
+
+| imputation | explainer | seed 0 raw / matched | seed 1 raw / matched | seed 2 raw / matched | |
+|---|---|---|---|---|---|
+| `black` | grad_cam | -0.04735 / +0.10068 | -0.05660 / +0.09844 | -0.05862 / +0.09682 | **flips** |
+| `mean` | grad_cam | -0.02421 / +0.11523 | -0.01719 / +0.11930 | -0.03106 / +0.11554 | **flips** |
+| `uniform_noise` | grad_cam | -0.04382 / +0.12083 | -0.04391 / +0.12249 | -0.03637 / +0.12748 | **flips** |
+| `blur` | grad_cam | +0.13321 / +0.09648 | +0.13129 / +0.09681 | +0.12671 / +0.09676 | agrees |
+| `black` | IG | -0.04214 / -0.00398 | -0.04681 / -0.00554 | -0.03902 / -0.00328 | agrees |
+| `blur` | IG | +0.07246 / +0.07100 | +0.07165 / +0.07172 | +0.06888 / +0.07084 | agrees |
+| `mean` | IG | +0.02605 / +0.07389 | +0.02631 / +0.07790 | +0.02684 / +0.07756 | agrees |
+| `uniform_noise` | IG | +0.00203 / +0.04855 | +0.00221 / +0.05236 | +0.00664 / +0.05194 | agrees |
+
+**3 of 8 cells, and the same three cells, in all three seeds.** All three are
+Grad-CAM; IG never flips in any scheme in any seed. This is §2's H2a second,
+structural rule -- disagreements concentrated in the explainer with the coarser
+native map, Grad-CAM at 4x4 against IG at pixel resolution -- and it is the
+*identity* of the flipping cells that replicates, not merely the count of three.
+
+One qualification on the criterion. H2a counts a disagreement only when both
+readings exclude zero in their own 95% CI, and `pilot_report.py` prints no
+half-width on the arm-level raw mean, so the table above is a disagreement of
+point-estimate signs. The per-severity half-widths it does print support two of
+the three without qualification: `black`/grad_cam and `uniform_noise`/grad_cam are
+resolved negative at all four severities in all three seeds. `mean`/grad_cam is
+resolved negative at severities 0 and 1 in all three seeds and unresolved at
+severities 3 and 5 in all three (seed 1's severity-5 reading is +0.00339 +/-
+0.01715). So the flip under the primary scheme rests on its clean and
+severity-1 readings, and the arm-level interval that H2a asks for has not been
+computed.
+
+### H1a: supported under two schemes, marginal under the primary scheme, and against under `blur`
+
+This subsection is the load-bearing one, and it does not come out clean.
+
+§2 defines **A** as the largest |mean `raw_faithfulness`| over the model-free
+`random_lowres_<g>` arms and **E** as the largest |mean `matched_faithfulness`|
+in the same scheme, and registers the test as a **paired bootstrap over
+evaluation images of A - E**. `scripts/pilot_report.py` does not compute that
+bootstrap. It reports A and E with separate intervals, and the two are correlated
+-- they are built from the same images and the same removal curves -- so A - E's
+half-width cannot be recovered from them. A - E is therefore bounded both ways:
+
+- `indep` = sqrt(hw_A^2 + hw_E^2), the half-width A - E would have if the two
+  readings were independent. This is the optimistic bound.
+- `cons` = hw_A + hw_E, the half-width it cannot exceed whatever the correlation.
+  This is the conservative bound.
+
+A is `random_lowres_2` in all twelve (scheme, seed) combinations and its
+half-width is read from the `GEOMETRY LADDER` table; E is
+`grad_cam vs grad_cam_rolled` in all twelve and its half-width from
+`GEOMETRY-MATCHED FAITHFULNESS`.
+
+| scheme | seed | A | E | A - E | indep | cons | verdict |
+|---|---|---|---|---|---|---|---|
+| `black` | 0 | 0.1993 | 0.1007 | +0.0986 | 0.0235 | 0.0321 | supported, both bounds |
+| `black` | 1 | 0.2001 | 0.0984 | +0.1016 | 0.0230 | 0.0314 | supported, both bounds |
+| `black` | 2 | 0.1969 | 0.0968 | +0.1001 | 0.0242 | 0.0329 | supported, both bounds |
+| `uniform_noise` | 0 | 0.1855 | 0.1208 | +0.0647 | 0.0172 | 0.0243 | supported, both bounds |
+| `uniform_noise` | 1 | 0.1852 | 0.1225 | +0.0627 | 0.0177 | 0.0250 | supported, both bounds |
+| `uniform_noise` | 2 | 0.1800 | 0.1275 | +0.0525 | 0.0172 | 0.0243 | supported, both bounds |
+| `mean` | 0 | 0.1598 | 0.1152 | +0.0446 | 0.0220 | 0.0305 | supported, both bounds |
+| `mean` | 1 | 0.1486 | 0.1193 | **+0.0293** | 0.0222 | **0.0307** | **clears `indep` only** |
+| `mean` | 2 | 0.1575 | 0.1155 | +0.0419 | 0.0224 | 0.0310 | supported, both bounds |
+| `blur` | 0 | 0.0440 | 0.0965 | -0.0525 | 0.0154 | 0.0218 | **against** |
+| `blur` | 1 | 0.0450 | 0.0968 | -0.0518 | 0.0156 | 0.0221 | **against** |
+| `blur` | 2 | 0.0390 | 0.0968 | -0.0578 | 0.0160 | 0.0227 | **against** |
+
+**`mean` is §2's declared primary scheme** -- it is the one `configs/version_a.yaml`
+runs -- so this is not a footnote. **H1a's primary-scheme test is marginal.** A - E
+is positive in all three seeds, clears the optimistic bound in all three, and
+fails the conservative bound in one of three. Under `black` and `uniform_noise`
+it clears both bounds in every seed by a wide margin. Under `blur` it runs the
+other way in every seed: E is larger than A, by more than either bound, so `blur`
+is a replicated counterexample rather than noise.
+
+**The pre-registered test would settle this and has not been run.** The paired
+bootstrap of A - E needs the per-image curve data. Each session wrote its cache
+to `/kaggle/working/cache` and none of the three was kept (see the operational
+note below), so computing it is a re-run and not a re-analysis. Until it is run,
+the correct statement is the
+one above: supported under `black` and `uniform_noise`, marginal and unresolved
+under `mean`, against under `blur`. §2's per-scheme-never-pooled rule is what
+makes that statement sayable at all; pooling would have hidden both the `blur`
+counterexample and the primary scheme's weakness.
+
+### The matched gate fails in all three seeds
+
+| | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| `GATE (GEOMETRY-MATCHED)` | 0/29 | 0/28 | 0/28 |
+
+No pair clears a half-width under 10% of its clean-to-severity-5 change on the
+matched metric, in any seed. The pre-registered failure branch fires in all
+three, and the P3b.4 replication adds nothing that would reopen the decision.
+
+Part 3's n-scaling table does not itself replicate, and the direction of the
+movement matters. The best ratio is 0.143, 0.143 and 0.134 across the three
+seeds, so the sample size the closest pair would need is 2,045, 2,045 and 1,796
+images. Scaling every resolvable pair's ratio as 1/sqrt(n):
+
+| n | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| 1,000 (actual) | 0/29 | 0/28 | 0/28 |
+| 2,000 | 0/29 | 0/28 | 1/28 |
+| 3,000 | 6/29 | 5/28 | 3/28 |
+| 5,000 | 7/29 | 7/28 | 12/28 |
+| 10,000 | 19/29 | 17/28 | 20/28 |
+
+At n=2000 the gate passes nothing in two seeds and one pair in the third. Above
+that the counts diverge enough -- 3 to 6 at n=3000, 7 to 12 at n=5000 -- that no
+single n/pass-count pair should be quoted as a prediction. The claim that
+survives all three seeds is the one at the sample size actually run: zero.
+
+### The raw gate's verdict moves with the seed; the matched gate's does not
+
+| | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| `GATE (RAW)` | 14/85 | 16/82 | 12/87 |
+| as a rate | 16.5% | 19.5% | 13.8% |
+| resolvable of 120 rows | 85 | 82 | 87 |
+| `GATE (GEOMETRY-MATCHED)` | 0/29 | 0/28 | 0/28 |
+
+This is a contrast Part 3 could not draw. The raw metric is not only confounded
+by mask geometry -- a model-free blob scores well below zero on it -- its *gate
+verdict* is seed-unstable, moving over a 5.7-point range in pass rate on three
+runs that differ in nothing but the training seed. The matched gate is stably
+zero.
+
+The membership moves too, not just the count. Across the three seeds 16 distinct
+(scheme, explainer, family) rows pass at least once and only 11 pass in all
+three. `black`/random_lowres_16 passes in seed 1 alone. `grad_cam` itself passes
+under `black` and `mean` in seeds 0 and 1 and in neither under seed 2, while its
+own displaced copy `grad_cam_rolled` passes in all three -- a gate on the raw
+metric that admits the displaced map more reliably than the real one. Every pass
+in every seed, all 42 of them, is in the `gaussian_noise` family.
+
+Taken with the two gates' counts, this is the cleanest operational statement of
+the measurement-validity finding: the metric whose gate sometimes passes is the
+one that reads mask geometry, and the metric that reads the explainer cannot
+resolve its change at this n in any seed.
+
+### TEST 1 replicates: 4 of 4
+
+`gain = faithfulness(rolled) - faithfulness(explainer)`; a more negative gain
+means the explainer beats its own displaced copy by more. Displacement runs 5.73
+to 17.90 px in five steps in all three logs.
+
+| imputation | explainer | seed 0, 5.73 -> 17.90 px | seed 1 | seed 2 |
+|---|---|---|---|---|
+| `blur` | grad_cam | -0.03410 -> -0.15359, 4.5x | -0.02980 -> -0.15120, 5.1x | -0.02960 -> -0.15353, 5.2x |
+| `mean` | grad_cam | -0.04357 -> -0.18904, 4.3x | -0.04502 -> -0.19522, 4.3x | -0.04722 -> -0.19531, 4.1x |
+| `blur` | IG | -0.05213 -> -0.08868, 1.7x | -0.04601 -> -0.08622, 1.9x | -0.05501 -> -0.08670, 1.6x |
+| `mean` | IG | -0.05582 -> -0.09381, 1.7x | -0.05516 -> -0.09716, 1.8x | -0.05617 -> -0.09853, 1.8x |
+
+All four rows read `advantage GROWS with distance (beats its copy)` in all three
+seeds -- **4 of 4 in 3 of 3**. Displacing a map further costs more, so what the
+matched comparison measures is spatially specific aim and not merely a
+differently shaped mask. The Grad-CAM/IG split replicates too: over the same
+displacement range Grad-CAM's advantage grows by a factor of 4.1 to 5.2 and IG's
+by 1.6 to 1.9, in every seed and under both imputation schemes.
+
+### TEST 2 replicates, with its exception
+
+TEST 2 orders every arm by mask spread and takes each real arm's residual against
+the model-free arms of nearest spread.
+
+| imputation | arm | seed 0 | seed 1 | seed 2 | comparator |
+|---|---|---|---|---|---|
+| `blur` | grad_cam_rolled | -0.00439 | -0.00670 | -0.00583 | `random_lowres_4`, within 0.36 of spread |
+| `mean` | grad_cam_rolled | -0.01445 | -0.01726 | -0.02217 | `random_lowres_4`, within 0.36 |
+| `blur` | IG_rolled | -0.02527 | -0.02653 | -0.02253 | `random_lowres_8`, within 0.43 |
+| `mean` | IG_rolled | **+0.04985** | **+0.03722** | **+0.04979** | `random_lowres_8`, within 0.43 |
+| `blur` | grad_cam | +0.08923 | +0.08626 | +0.08775 | `random_lowres_2`, within 0.68 |
+| `mean` | grad_cam | +0.13562 | +0.13137 | +0.12642 | `random_lowres_2`, within 0.68 |
+| `blur` | IG | +0.03134 | +0.03046 | +0.03310 | `random_lowres_4`, within 1.44 |
+| `mean` | IG | +0.15104 | +0.14555 | +0.15127 | `random_lowres_4`, within 1.44 |
+
+**What replicated.** `grad_cam_rolled` -- a real Grad-CAM map, displaced -- sits on
+the model-free line in all three seeds, within 0.007 of it under `blur` and
+within 0.023 under `mean`, while the correctly-aimed arms sit 0.03 to 0.15 above
+it. A map whose geometry is intact and whose aim has been destroyed behaves like
+model-free noise of its own geometry. That is the geometry account's sharpest
+single prediction and it holds on three trainings.
+
+**What did not.** `integrated_gradients_rolled` does not land on the line under
+`mean`: +0.04985, +0.03722 and +0.04979, positive in all three seeds and a
+quarter to a third of correctly-aimed IG's own residual in the same scheme. Under
+`blur` it reads slightly below the line, -0.02527 to -0.02253, also in all three.
+So the exception
+replicates as reliably as the confirmation does, and the honest statement is the
+one Part 3 made: clean for `grad_cam_rolled`, partial for
+`integrated_gradients_rolled`.
+
+### Calibration is consistent across seeds
+
+Clean to severity 5, from the `CALIBRATION` block in each log.
+
+| metric | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| accuracy | 0.8610 -> 0.5487 | 0.8580 -> 0.5530 | 0.8620 -> 0.5600 |
+| ece_em | 0.0516 -> 0.2514 | 0.0474 -> 0.2448 | 0.0566 -> 0.2391 |
+| aurc | 0.0315 -> 0.2702 | 0.0299 -> 0.2854 | 0.0264 -> 0.2707 |
+
+The shift is doing the same thing to the model in all three seeds: a 30- to
+31-point accuracy drop, a four- to fivefold rise in expected calibration error,
+and an eight- to tenfold rise in AURC. Clean accuracy varies by 0.4 points across
+the three trainings and severity-5 accuracy by 1.1. The degradation these runs
+measure faithfulness against is not a seed artefact.
+
+### Operational note
+
+Neither session had the cache attached. Both logs print
+`cache read  (none: /kaggle/input/shiftprofile-cache is not attached)`, as Part
+3's does, so each session retrained the checkpoint from scratch and paid the
+CIFAR-10 download again: `170M/170M [1:00:44<00:00, 46.8kB/s]` for seed 1 and
+`[1:01:00<00:00, 46.6kB/s]` for seed 2. Roughly an hour of each session -- 2.46
+and 2.52 hours of wall clock -- was a download an attached dataset would have
+skipped, so the 8854.9s and 9065.7s totals are not compute figures.
+
+The three caches are therefore independent rather than cumulative: nothing was
+shared between the three sessions but the code and the committed evaluation
+indices. That costs GPU time and does no harm to the results -- if anything it
+makes the three runs more independent than the plan required. It has one real
+cost, recorded in the H1a subsection above: no per-image curve cache survives,
+so the registered paired bootstrap of A - E needs a re-run and not a
+re-analysis.
+
+### Scope
+
+Three seeds, one model (`resnet18`), one dataset, 1000 images, one set of 10
+cells. The model axis is still single; `vit_tiny` has never run. §6's
+mixed-effects aggregation, which is how seeds are supposed to be combined, is not
+implemented for faithfulness, so everything above is a **count across seeds with
+the per-seed figures shown** and not a pooled estimate with an interval over
+seeds. Read "11 of 12 in 3 of 3" as what it says: eleven cells held in three
+independent runs. It is not a variance component.
+
+Raw output for both sessions below, sliced from line 89 of each log to its end by
+script -- not transcribed -- from
+`docs/runs/2026-10-18_seed1.log` and `docs/runs/2026-10-18_seed2.log`.
+
+### Seed 1 raw log
+
+  curves: 400 units, 2964s (7.4s/unit), at curves:resnet18:1:fog:5:random_lowres_32:black
+
+============================================================
+Completed 510 cells, skipped 0 cached, failed 0 cells
+Elapsed time: 8854.9s
+manifest written to /kaggle/working/cache/run_manifest.jsonl
+============================================================
+config      /kaggle/working/shiftprofile/1/configs/pilot_validity.yaml
+cache read  /kaggle/working/cache
+cells       10
+eval images 1000
+imputation  mean, blur, uniform_noise, black
+explainers  integrated_gradients, grad_cam, random, integrated_gradients_rolled, grad_cam_rolled, random_lowres_2, random_lowres_4, random_lowres_8, random_lowres_16, random_lowres_32
+
+========================================================================
+CALIBRATION  (10 cells, n=1000 images)
+========================================================================
+ sev   accuracy     brier    ece_em    ece_db      aurc
+   0     0.8580    0.2090    0.0474    0.0559    0.0299
+   1     0.8297    0.2483    0.0663    0.0841    0.0410
+   3     0.7267    0.4099    0.1290    0.1413    0.1157
+   5     0.5530    0.6813    0.2448    0.2615    0.2854
+
+========================================================================
+FAITHFULNESS  (random control AUC minus model AUC; >0 beats random)
+========================================================================
+
+  imputation: black
+    grad_cam               mean -0.05660   2/10 cells above 0  
+    grad_cam_rolled        mean -0.15504   1/10 cells above 0  
+    integrated_gradients   mean -0.04681   0/10 cells above 0  NO CELL BEATS RANDOM
+    integrated_gradients_rolled mean -0.04127   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean +0.00004   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean -0.03833   2/10 cells above 0  
+    random_lowres_2        mean -0.20005   1/10 cells above 0  
+    random_lowres_32       mean +0.00261   2/10 cells above 0  
+    random_lowres_4        mean -0.14363   1/10 cells above 0  
+    random_lowres_8        mean -0.07938   2/10 cells above 0  
+
+  imputation: blur
+    grad_cam               mean +0.13129   10/10 cells above 0  
+    grad_cam_rolled        mean +0.03448   8/10 cells above 0  
+    integrated_gradients   mean +0.07165   10/10 cells above 0  
+    integrated_gradients_rolled mean -0.00008   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean -0.00002   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean +0.00698   3/10 cells above 0  
+    random_lowres_2        mean +0.04503   9/10 cells above 0  
+    random_lowres_32       mean +0.01504   8/10 cells above 0  
+    random_lowres_4        mean +0.04118   9/10 cells above 0  
+    random_lowres_8        mean +0.02645   8/10 cells above 0  
+
+  imputation: mean
+    grad_cam               mean -0.01719   2/10 cells above 0  
+    grad_cam_rolled        mean -0.13650   1/10 cells above 0  
+    integrated_gradients   mean +0.02631   8/10 cells above 0  
+    integrated_gradients_rolled mean -0.05159   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean -0.00001   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean -0.07261   1/10 cells above 0  
+    random_lowres_2        mean -0.14856   1/10 cells above 0  
+    random_lowres_32       mean +0.00307   2/10 cells above 0  
+    random_lowres_4        mean -0.11924   2/10 cells above 0  
+    random_lowres_8        mean -0.08881   2/10 cells above 0  
+
+  imputation: uniform_noise
+    grad_cam               mean -0.04391   1/10 cells above 0  
+    grad_cam_rolled        mean -0.16640   0/10 cells above 0  NO CELL BEATS RANDOM
+    integrated_gradients   mean +0.00221   3/10 cells above 0  
+    integrated_gradients_rolled mean -0.05015   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean -0.00002   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean -0.07386   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_2        mean -0.18519   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_32       mean -0.00226   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_4        mean -0.15395   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_8        mean -0.11965   0/10 cells above 0  NO CELL BEATS RANDOM
+
+imputation      explainer               sev   faithfulness   half_width
+black           grad_cam                  0       -0.08366      0.01871
+black           grad_cam                  1       -0.07474      0.01919
+black           grad_cam                  3       -0.03620      0.02045
+black           grad_cam                  5       -0.04984      0.02027
+black           grad_cam_rolled           0       -0.20956      0.01905
+black           grad_cam_rolled           1       -0.19749      0.01897
+black           grad_cam_rolled           3       -0.13520      0.02063
+black           grad_cam_rolled           5       -0.11425      0.02034
+black           integrated_gradients      0       -0.06603      0.00779
+black           integrated_gradients      1       -0.05921      0.00742
+black           integrated_gradients      3       -0.04384      0.00713
+black           integrated_gradients      5       -0.03098      0.00692
+black           integrated_gradients_rolled    0       -0.05822      0.00739
+black           integrated_gradients_rolled    1       -0.05360      0.00704
+black           integrated_gradients_rolled    3       -0.03651      0.00711
+black           integrated_gradients_rolled    5       -0.02804      0.00687
+black           random                    0       +0.00007      0.00013
+black           random                    1       +0.00004      0.00013
+black           random                    3       +0.00001      0.00012
+black           random                    5       +0.00007      0.00014
+black           random_lowres_16          0       -0.07407      0.01283
+black           random_lowres_16          1       -0.06345      0.01248
+black           random_lowres_16          3       -0.02845      0.01299
+black           random_lowres_16          5       -0.01118      0.01140
+black           random_lowres_2           0       -0.24354      0.01880
+black           random_lowres_2           1       -0.23844      0.01880
+black           random_lowres_2           3       -0.18373      0.02092
+black           random_lowres_2           5       -0.16349      0.02044
+black           random_lowres_32          0       -0.00122      0.00557
+black           random_lowres_32          1       -0.00008      0.00532
+black           random_lowres_32          3       +0.00444      0.00525
+black           random_lowres_32          5       +0.00476      0.00487
+black           random_lowres_4           0       -0.19149      0.01863
+black           random_lowres_4           1       -0.18064      0.01871
+black           random_lowres_4           3       -0.12258      0.02030
+black           random_lowres_4           5       -0.11173      0.01970
+black           random_lowres_8           0       -0.12970      0.01606
+black           random_lowres_8           1       -0.11666      0.01621
+black           random_lowres_8           3       -0.06334      0.01748
+black           random_lowres_8           5       -0.04137      0.01590
+blur            grad_cam                  0       +0.12781      0.01309
+blur            grad_cam                  1       +0.13276      0.01302
+blur            grad_cam                  3       +0.14102      0.01312
+blur            grad_cam                  5       +0.12126      0.01225
+blur            grad_cam_rolled           0       +0.03185      0.01108
+blur            grad_cam_rolled           1       +0.03132      0.01120
+blur            grad_cam_rolled           3       +0.03929      0.01189
+blur            grad_cam_rolled           5       +0.03371      0.01150
+blur            integrated_gradients      0       +0.06356      0.00847
+blur            integrated_gradients      1       +0.06674      0.00905
+blur            integrated_gradients      3       +0.07989      0.00993
+blur            integrated_gradients      5       +0.07100      0.00959
+blur            integrated_gradients_rolled    0       -0.00102      0.00766
+blur            integrated_gradients_rolled    1       -0.00221      0.00789
+blur            integrated_gradients_rolled    3       +0.00193      0.00846
+blur            integrated_gradients_rolled    5       +0.00036      0.00816
+blur            random                    0       +0.00001      0.00008
+blur            random                    1       -0.00000      0.00009
+blur            random                    3       +0.00001      0.00011
+blur            random                    5       -0.00006      0.00013
+blur            random_lowres_16          0       +0.00645      0.00822
+blur            random_lowres_16          1       +0.00653      0.00878
+blur            random_lowres_16          3       +0.00593      0.00909
+blur            random_lowres_16          5       +0.00864      0.00918
+blur            random_lowres_2           0       +0.04690      0.01087
+blur            random_lowres_2           1       +0.04555      0.01095
+blur            random_lowres_2           3       +0.04698      0.01140
+blur            random_lowres_2           5       +0.04195      0.01091
+blur            random_lowres_32          0       +0.01957      0.00636
+blur            random_lowres_32          1       +0.01977      0.00685
+blur            random_lowres_32          3       +0.01464      0.00687
+blur            random_lowres_32          5       +0.00920      0.00697
+blur            random_lowres_4           0       +0.04043      0.01057
+blur            random_lowres_4           1       +0.04013      0.01092
+blur            random_lowres_4           3       +0.04260      0.01141
+blur            random_lowres_4           5       +0.04107      0.01092
+blur            random_lowres_8           0       +0.02276      0.01006
+blur            random_lowres_8           1       +0.02439      0.01020
+blur            random_lowres_8           3       +0.02841      0.01119
+blur            random_lowres_8           5       +0.02778      0.01062
+mean            grad_cam                  0       -0.05091      0.01703
+mean            grad_cam                  1       -0.04058      0.01749
+mean            grad_cam                  3       -0.00316      0.01861
+mean            grad_cam                  5       +0.00339      0.01715
+mean            grad_cam_rolled           0       -0.18872      0.01891
+mean            grad_cam_rolled           1       -0.17664      0.01940
+mean            grad_cam_rolled           3       -0.12364      0.01995
+mean            grad_cam_rolled           5       -0.09181      0.01971
+mean            integrated_gradients      0       +0.02519      0.00707
+mean            integrated_gradients      1       +0.02920      0.00732
+mean            integrated_gradients      3       +0.02712      0.00747
+mean            integrated_gradients      5       +0.02298      0.00732
+mean            integrated_gradients_rolled    0       -0.06717      0.00818
+mean            integrated_gradients_rolled    1       -0.06106      0.00837
+mean            integrated_gradients_rolled    3       -0.04993      0.00820
+mean            integrated_gradients_rolled    5       -0.03860      0.00818
+mean            random                    0       -0.00000      0.00015
+mean            random                    1       +0.00002      0.00013
+mean            random                    3       -0.00005      0.00015
+mean            random                    5       -0.00001      0.00014
+mean            random_lowres_16          0       -0.10762      0.01323
+mean            random_lowres_16          1       -0.09781      0.01282
+mean            random_lowres_16          3       -0.06653      0.01311
+mean            random_lowres_16          5       -0.04181      0.01236
+mean            random_lowres_2           0       -0.19685      0.01785
+mean            random_lowres_2           1       -0.18591      0.01846
+mean            random_lowres_2           3       -0.13635      0.01948
+mean            random_lowres_2           5       -0.10734      0.01858
+mean            random_lowres_32          0       -0.00190      0.00620
+mean            random_lowres_32          1       +0.00092      0.00603
+mean            random_lowres_32          3       +0.00528      0.00624
+mean            random_lowres_32          5       +0.00466      0.00599
+mean            random_lowres_4           0       -0.17079      0.01847
+mean            random_lowres_4           1       -0.15685      0.01856
+mean            random_lowres_4           3       -0.10547      0.01948
+mean            random_lowres_4           5       -0.07822      0.01883
+mean            random_lowres_8           0       -0.13628      0.01723
+mean            random_lowres_8           1       -0.12274      0.01733
+mean            random_lowres_8           3       -0.07940      0.01785
+mean            random_lowres_8           5       -0.04849      0.01661
+uniform_noise   grad_cam                  0       -0.06664      0.00975
+uniform_noise   grad_cam                  1       -0.05952      0.00945
+uniform_noise   grad_cam                  3       -0.03921      0.00945
+uniform_noise   grad_cam                  5       -0.02543      0.00871
+uniform_noise   grad_cam_rolled           0       -0.21487      0.01342
+uniform_noise   grad_cam_rolled           1       -0.20161      0.01369
+uniform_noise   grad_cam_rolled           3       -0.15805      0.01361
+uniform_noise   grad_cam_rolled           5       -0.12338      0.01347
+uniform_noise   integrated_gradients      0       +0.00329      0.00571
+uniform_noise   integrated_gradients      1       +0.00526      0.00586
+uniform_noise   integrated_gradients      3       +0.00016      0.00591
+uniform_noise   integrated_gradients      5       +0.00087      0.00570
+uniform_noise   integrated_gradients_rolled    0       -0.06163      0.00627
+uniform_noise   integrated_gradients_rolled    1       -0.05863      0.00637
+uniform_noise   integrated_gradients_rolled    3       -0.04755      0.00634
+uniform_noise   integrated_gradients_rolled    5       -0.04043      0.00632
+uniform_noise   random                    0       -0.00001      0.00011
+uniform_noise   random                    1       -0.00004      0.00012
+uniform_noise   random                    3       -0.00001      0.00012
+uniform_noise   random                    5       -0.00001      0.00012
+uniform_noise   random_lowres_16          0       -0.09556      0.00853
+uniform_noise   random_lowres_16          1       -0.09072      0.00822
+uniform_noise   random_lowres_16          3       -0.07047      0.00821
+uniform_noise   random_lowres_16          5       -0.05315      0.00781
+uniform_noise   random_lowres_2           0       -0.22840      0.01285
+uniform_noise   random_lowres_2           1       -0.22206      0.01285
+uniform_noise   random_lowres_2           3       -0.17656      0.01327
+uniform_noise   random_lowres_2           5       -0.14255      0.01258
+uniform_noise   random_lowres_32          0       -0.00124      0.00426
+uniform_noise   random_lowres_32          1       -0.00269      0.00429
+uniform_noise   random_lowres_32          3       -0.00190      0.00430
+uniform_noise   random_lowres_32          5       -0.00253      0.00417
+uniform_noise   random_lowres_4           0       -0.19809      0.01290
+uniform_noise   random_lowres_4           1       -0.18892      0.01264
+uniform_noise   random_lowres_4           3       -0.14550      0.01330
+uniform_noise   random_lowres_4           5       -0.11273      0.01260
+uniform_noise   random_lowres_8           0       -0.15866      0.01098
+uniform_noise   random_lowres_8           1       -0.14962      0.01114
+uniform_noise   random_lowres_8           3       -0.11239      0.01112
+uniform_noise   random_lowres_8           5       -0.08394      0.01056
+
+========================================================================
+GEOMETRY LADDER   random_lowres_<grid>: noise on a grid x grid
+                  lattice, upsampled as Grad-CAM is. No model input.
+========================================================================
+imputation       grid   faithfulness   half_width
+black               2       -0.20005      0.01993
+black               4       -0.14363      0.01948
+black               8       -0.07938      0.01648
+black              16       -0.03833      0.01234
+black              32       +0.00261      0.00519
+blur                2       +0.04503      0.01106
+blur                4       +0.04118      0.01103
+blur                8       +0.02645      0.01061
+blur               16       +0.00698      0.00894
+blur               32       +0.01504      0.00684
+mean                2       -0.14856      0.01874
+mean                4       -0.11924      0.01891
+mean                8       -0.08881      0.01726
+mean               16       -0.07261      0.01281
+mean               32       +0.00307      0.00610
+uniform_noise       2       -0.18519      0.01289
+uniform_noise       4       -0.15395      0.01285
+uniform_noise       8       -0.11965      0.01095
+uniform_noise      16       -0.07386      0.00812
+uniform_noise      32       -0.00226      0.00425
+
+Grad-CAM's map is 4x4 on ResNet-18. If its faithfulness sits on this
+curve at grid=4, its score is its resolution and not its content.
+
+========================================================================
+GEOMETRY-MATCHED FAITHFULNESS   explainer minus a control of the
+                                same mask geometry; >0 beats it
+========================================================================
+imputation      explainer                vs                   kind          matched     half_w  verdict
+black           grad_cam                 grad_cam_rolled      alignment    +0.09844    0.01145  10/10 cells beat it
+black           grad_cam                 random_lowres_4      geometry     +0.08703    0.01078  10/10 cells beat it
+black           integrated_gradients     integrated_gradients_rolled alignment    -0.00554    0.00634  NO CELL BEATS ITS MATCHED CONTROL
+blur            grad_cam                 grad_cam_rolled      alignment    +0.09681    0.01102  10/10 cells beat it
+blur            grad_cam                 random_lowres_4      geometry     +0.09011    0.01014  10/10 cells beat it
+blur            integrated_gradients     integrated_gradients_rolled alignment    +0.07172    0.00971  10/10 cells beat it
+mean            grad_cam                 grad_cam_rolled      alignment    +0.11930    0.01196  10/10 cells beat it
+mean            grad_cam                 random_lowres_4      geometry     +0.10204    0.01113  10/10 cells beat it
+mean            integrated_gradients     integrated_gradients_rolled alignment    +0.07790    0.00811  10/10 cells beat it
+uniform_noise   grad_cam                 grad_cam_rolled      alignment    +0.12249    0.01209  10/10 cells beat it
+uniform_noise   grad_cam                 random_lowres_4      geometry     +0.11004    0.01137  10/10 cells beat it
+uniform_noise   integrated_gradients     integrated_gradients_rolled alignment    +0.05236    0.00687  10/10 cells beat it
+
+The pixel-i.i.d. control cancels exactly in this difference: both terms
+use the same control_seed over the same images, so what is left is the
+explainer scored against its own geometry.
+
+========================================================================
+P3 GATE (RAW)   half-width < 10% of the clean-to-severity-5 change
+                on `faithfulness`: the explainer against a pixel-iid
+                control. The validity run showed that quantity tracks
+                mask geometry -- a model-free blob scores well below
+                zero on it -- so this table is reported, not read.
+========================================================================
+imputation      explainer                   family               change     half_w     ratio  verdict
+black           grad_cam                    defocus_blur       -0.10551    0.01890     0.179  FAIL
+black           grad_cam                    fog                -0.04460    0.01936     0.434  FAIL
+black           grad_cam                    gaussian_noise     +0.25157    0.02256     0.090  PASS
+black           grad_cam_rolled             defocus_blur       -0.02781    0.01905     0.685  FAIL
+black           grad_cam_rolled             fog                +0.03932    0.01905     0.485  FAIL
+black           grad_cam_rolled             gaussian_noise     +0.27442    0.02432     0.089  PASS
+black           integrated_gradients        defocus_blur       +0.01047    0.00779     0.744  FAIL
+black           integrated_gradients        fog                +0.03620    0.00779     0.215  FAIL
+black           integrated_gradients        gaussian_noise     +0.05847    0.00779     0.133  FAIL
+black           integrated_gradients_rolled defocus_blur       +0.00519    0.00739       n/a  no change
+black           integrated_gradients_rolled fog                +0.02327    0.00739     0.317  FAIL
+black           integrated_gradients_rolled gaussian_noise     +0.06207    0.00786     0.127  FAIL
+black           random                      defocus_blur       +0.00005    0.00014       n/a  no change
+black           random                      fog                -0.00001    0.00013       n/a  no change
+black           random                      gaussian_noise     -0.00005    0.00019       n/a  no change
+black           random_lowres_16            defocus_blur       +0.00324    0.01283       n/a  no change
+black           random_lowres_16            fog                +0.04705    0.01283     0.273  FAIL
+black           random_lowres_16            gaussian_noise     +0.13840    0.01375     0.099  PASS
+black           random_lowres_2             defocus_blur       -0.04869    0.01880     0.386  FAIL
+black           random_lowres_2             fog                +0.00783    0.01964       n/a  no change
+black           random_lowres_2             gaussian_noise     +0.28103    0.02362     0.084  PASS
+black           random_lowres_32            defocus_blur       -0.00895    0.00557     0.622  FAIL
+black           random_lowres_32            fog                -0.00122    0.00557       n/a  no change
+black           random_lowres_32            gaussian_noise     +0.02812    0.00669     0.238  FAIL
+black           random_lowres_4             defocus_blur       -0.03931    0.01863     0.474  FAIL
+black           random_lowres_4             fog                +0.01830    0.01897       n/a  no change
+black           random_lowres_4             gaussian_noise     +0.26028    0.02299     0.088  PASS
+black           random_lowres_8             defocus_blur       -0.00285    0.01606       n/a  no change
+black           random_lowres_8             fog                +0.05276    0.01606     0.304  FAIL
+black           random_lowres_8             gaussian_noise     +0.21509    0.01967     0.091  PASS
+blur            grad_cam                    defocus_blur       -0.06914    0.01309     0.189  FAIL
+blur            grad_cam                    fog                -0.01819    0.01309     0.719  FAIL
+blur            grad_cam                    gaussian_noise     +0.06770    0.01429     0.211  FAIL
+blur            grad_cam_rolled             defocus_blur       -0.03070    0.01108     0.361  FAIL
+blur            grad_cam_rolled             fog                -0.02714    0.01108     0.408  FAIL
+blur            grad_cam_rolled             gaussian_noise     +0.06342    0.01388     0.219  FAIL
+blur            integrated_gradients        defocus_blur       -0.00479    0.00847       n/a  no change
+blur            integrated_gradients        fog                +0.03409    0.00884     0.259  FAIL
+blur            integrated_gradients        gaussian_noise     -0.00699    0.01149       n/a  no change
+blur            integrated_gradients_rolled defocus_blur       -0.00442    0.00766       n/a  no change
+blur            integrated_gradients_rolled fog                -0.00134    0.00766       n/a  no change
+blur            integrated_gradients_rolled gaussian_noise     +0.00991    0.01031       n/a  no change
+blur            random                      defocus_blur       -0.00001    0.00008       n/a  no change
+blur            random                      fog                -0.00006    0.00014       n/a  no change
+blur            random                      gaussian_noise     -0.00015    0.00017       n/a  no change
+blur            random_lowres_16            defocus_blur       -0.01480    0.00822     0.555  FAIL
+blur            random_lowres_16            fog                -0.00721    0.00822       n/a  no change
+blur            random_lowres_16            gaussian_noise     +0.02859    0.01232     0.431  FAIL
+blur            random_lowres_2             defocus_blur       -0.03804    0.01087     0.286  FAIL
+blur            random_lowres_2             fog                -0.02954    0.01087     0.368  FAIL
+blur            random_lowres_2             gaussian_noise     +0.05271    0.01319     0.250  FAIL
+blur            random_lowres_32            defocus_blur       -0.01512    0.00636     0.421  FAIL
+blur            random_lowres_32            fog                -0.01752    0.00636     0.363  FAIL
+blur            random_lowres_32            gaussian_noise     +0.00156    0.00968       n/a  no change
+blur            random_lowres_4             defocus_blur       -0.03506    0.01057     0.301  FAIL
+blur            random_lowres_4             fog                -0.02692    0.01057     0.393  FAIL
+blur            random_lowres_4             gaussian_noise     +0.06390    0.01379     0.216  FAIL
+blur            random_lowres_8             defocus_blur       -0.02152    0.01006     0.467  FAIL
+blur            random_lowres_8             fog                -0.01384    0.01006     0.727  FAIL
+blur            random_lowres_8             gaussian_noise     +0.05040    0.01376     0.273  FAIL
+mean            grad_cam                    defocus_blur       -0.04692    0.01703     0.363  FAIL
+mean            grad_cam                    fog                -0.01931    0.01703     0.882  FAIL
+mean            grad_cam                    gaussian_noise     +0.22914    0.02120     0.093  PASS
+mean            grad_cam_rolled             defocus_blur       -0.01353    0.01891       n/a  no change
+mean            grad_cam_rolled             fog                +0.02164    0.01891     0.874  FAIL
+mean            grad_cam_rolled             gaussian_noise     +0.28262    0.02529     0.089  PASS
+mean            integrated_gradients        defocus_blur       -0.02652    0.00707     0.267  FAIL
+mean            integrated_gradients        fog                -0.01194    0.00707     0.593  FAIL
+mean            integrated_gradients        gaussian_noise     +0.03183    0.00842     0.264  FAIL
+mean            integrated_gradients_rolled defocus_blur       +0.00880    0.00818     0.929  FAIL
+mean            integrated_gradients_rolled fog                +0.01216    0.00840     0.691  FAIL
+mean            integrated_gradients_rolled gaussian_noise     +0.06473    0.00827     0.128  FAIL
+mean            random                      defocus_blur       -0.00001    0.00015       n/a  no change
+mean            random                      fog                +0.00002    0.00015       n/a  no change
+mean            random                      gaussian_noise     -0.00003    0.00015       n/a  no change
+mean            random_lowres_16            defocus_blur       +0.00852    0.01323       n/a  no change
+mean            random_lowres_16            fog                +0.03361    0.01323     0.394  FAIL
+mean            random_lowres_16            gaussian_noise     +0.15532    0.01534     0.099  PASS
+mean            random_lowres_2             defocus_blur       -0.01499    0.01785       n/a  no change
+mean            random_lowres_2             fog                +0.00953    0.01785       n/a  no change
+mean            random_lowres_2             gaussian_noise     +0.27399    0.02342     0.085  PASS
+mean            random_lowres_32            defocus_blur       -0.00281    0.00620       n/a  no change
+mean            random_lowres_32            fog                +0.00544    0.00620       n/a  no change
+mean            random_lowres_32            gaussian_noise     +0.01704    0.00631     0.370  FAIL
+mean            random_lowres_4             defocus_blur       -0.01719    0.01847       n/a  no change
+mean            random_lowres_4             fog                +0.01328    0.01847       n/a  no change
+mean            random_lowres_4             gaussian_noise     +0.28162    0.02401     0.085  PASS
+mean            random_lowres_8             defocus_blur       +0.00075    0.01723       n/a  no change
+mean            random_lowres_8             fog                +0.02351    0.01723     0.733  FAIL
+mean            random_lowres_8             gaussian_noise     +0.23911    0.02077     0.087  PASS
+uniform_noise   grad_cam                    defocus_blur       +0.02365    0.00975     0.412  FAIL
+uniform_noise   grad_cam                    fog                +0.02103    0.00975     0.464  FAIL
+uniform_noise   grad_cam                    gaussian_noise     +0.07896    0.00975     0.123  FAIL
+uniform_noise   grad_cam_rolled             defocus_blur       +0.05142    0.01342     0.261  FAIL
+uniform_noise   grad_cam_rolled             fog                +0.06065    0.01342     0.221  FAIL
+uniform_noise   grad_cam_rolled             gaussian_noise     +0.16240    0.01505     0.093  PASS
+uniform_noise   integrated_gradients        defocus_blur       -0.01760    0.00573     0.326  FAIL
+uniform_noise   integrated_gradients        fog                -0.01500    0.00571     0.381  FAIL
+uniform_noise   integrated_gradients        gaussian_noise     +0.02534    0.00571     0.225  FAIL
+uniform_noise   integrated_gradients_rolled defocus_blur       +0.00922    0.00639     0.693  FAIL
+uniform_noise   integrated_gradients_rolled fog                +0.00609    0.00640       n/a  no change
+uniform_noise   integrated_gradients_rolled gaussian_noise     +0.04828    0.00627     0.130  FAIL
+uniform_noise   random                      defocus_blur       -0.00007    0.00014       n/a  no change
+uniform_noise   random                      fog                +0.00007    0.00012       n/a  no change
+uniform_noise   random                      gaussian_noise     -0.00000    0.00011       n/a  no change
+uniform_noise   random_lowres_16            defocus_blur       +0.02023    0.00853     0.422  FAIL
+uniform_noise   random_lowres_16            fog                +0.03591    0.00853     0.238  FAIL
+uniform_noise   random_lowres_16            gaussian_noise     +0.07109    0.00859     0.121  FAIL
+uniform_noise   random_lowres_2             defocus_blur       +0.04619    0.01285     0.278  FAIL
+uniform_noise   random_lowres_2             fog                +0.05062    0.01285     0.254  FAIL
+uniform_noise   random_lowres_2             gaussian_noise     +0.16074    0.01412     0.088  PASS
+uniform_noise   random_lowres_32            defocus_blur       -0.00059    0.00426       n/a  no change
+uniform_noise   random_lowres_32            fog                -0.00290    0.00426       n/a  no change
+uniform_noise   random_lowres_32            gaussian_noise     -0.00038    0.00464       n/a  no change
+uniform_noise   random_lowres_4             defocus_blur       +0.04475    0.01290     0.288  FAIL
+uniform_noise   random_lowres_4             fog                +0.05831    0.01290     0.221  FAIL
+uniform_noise   random_lowres_4             gaussian_noise     +0.15303    0.01416     0.093  PASS
+uniform_noise   random_lowres_8             defocus_blur       +0.04143    0.01098     0.265  FAIL
+uniform_noise   random_lowres_8             fog                +0.05815    0.01098     0.189  FAIL
+uniform_noise   random_lowres_8             gaussian_noise     +0.12457    0.01165     0.094  PASS
+
+GATE (RAW): 16/82 resolvable pairs pass.
+Per the pre-registered failure branch, a failing gate means changing the faithfulness metric or pivoting to a measurement-validity paper. It does not mean raising n_eval_images: the half-width falls as 1/sqrt(n), so passing by that route costs 100x the compute for a 10x narrowing and is a data-dependent protocol change besides.
+========================================================================
+
+========================================================================
+P3 GATE (GEOMETRY-MATCHED)
+   half-width < 10% of the clean-to-severity-5 change in `matched`:
+   the explainer minus a control of its OWN mask geometry.
+   THIS is the gate the 1000-vs-2000 decision reads. The raw
+   gate above gates a quantity the validity run showed
+   confounded, so neither its passes nor its failures bear on
+   that decision.
+========================================================================
+imputation      explainer vs reference                              family               change     half_w     ratio  verdict
+black           grad_cam vs grad_cam_rolled                         defocus_blur       -0.07770    0.01223     0.157  FAIL
+black           grad_cam vs grad_cam_rolled                         fog                -0.08392    0.01223     0.146  FAIL
+black           grad_cam vs grad_cam_rolled                         gaussian_noise     -0.02285    0.01223     0.535  FAIL
+black           grad_cam vs random_lowres_4                         defocus_blur       -0.06620    0.01116     0.169  FAIL
+black           grad_cam vs random_lowres_4                         fog                -0.06291    0.01116     0.177  FAIL
+black           grad_cam vs random_lowres_4                         gaussian_noise     -0.00871    0.01116       n/a  no change
+black           integrated_gradients vs integrated_gradients_rolled defocus_blur       +0.00528    0.00714       n/a  no change
+black           integrated_gradients vs integrated_gradients_rolled fog                +0.01292    0.00714     0.553  FAIL
+black           integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.00360    0.00714       n/a  no change
+blur            grad_cam vs grad_cam_rolled                         defocus_blur       -0.03845    0.01101     0.286  FAIL
+blur            grad_cam vs grad_cam_rolled                         fog                +0.00895    0.01101       n/a  no change
+blur            grad_cam vs grad_cam_rolled                         gaussian_noise     +0.00428    0.01192       n/a  no change
+blur            grad_cam vs random_lowres_4                         defocus_blur       -0.03408    0.01008     0.296  FAIL
+blur            grad_cam vs random_lowres_4                         fog                +0.00873    0.01008       n/a  no change
+blur            grad_cam vs random_lowres_4                         gaussian_noise     +0.00380    0.01172       n/a  no change
+blur            integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.00037    0.00908       n/a  no change
+blur            integrated_gradients vs integrated_gradients_rolled fog                +0.03543    0.00944     0.266  FAIL
+blur            integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.01690    0.01146     0.678  FAIL
+mean            grad_cam vs grad_cam_rolled                         defocus_blur       -0.03338    0.01224     0.367  FAIL
+mean            grad_cam vs grad_cam_rolled                         fog                -0.04095    0.01224     0.299  FAIL
+mean            grad_cam vs grad_cam_rolled                         gaussian_noise     -0.05348    0.01224     0.229  FAIL
+mean            grad_cam vs random_lowres_4                         defocus_blur       -0.02973    0.01152     0.388  FAIL
+mean            grad_cam vs random_lowres_4                         fog                -0.03260    0.01152     0.353  FAIL
+mean            grad_cam vs random_lowres_4                         gaussian_noise     -0.05248    0.01152     0.220  FAIL
+mean            integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.03532    0.00814     0.230  FAIL
+mean            integrated_gradients vs integrated_gradients_rolled fog                -0.02410    0.00814     0.338  FAIL
+mean            integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.03290    0.00819     0.249  FAIL
+uniform_noise   grad_cam vs grad_cam_rolled                         defocus_blur       -0.02777    0.01197     0.431  FAIL
+uniform_noise   grad_cam vs grad_cam_rolled                         fog                -0.03962    0.01270     0.320  FAIL
+uniform_noise   grad_cam vs grad_cam_rolled                         gaussian_noise     -0.08344    0.01197     0.143  FAIL
+uniform_noise   grad_cam vs random_lowres_4                         defocus_blur       -0.02110    0.01139     0.540  FAIL
+uniform_noise   grad_cam vs random_lowres_4                         fog                -0.03728    0.01139     0.306  FAIL
+uniform_noise   grad_cam vs random_lowres_4                         gaussian_noise     -0.07407    0.01139     0.154  FAIL
+uniform_noise   integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.02682    0.00699     0.261  FAIL
+uniform_noise   integrated_gradients vs integrated_gradients_rolled fog                -0.02110    0.00710     0.337  FAIL
+uniform_noise   integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.02294    0.00699     0.305  FAIL
+
+GATE (GEOMETRY-MATCHED): 0/28 resolvable pairs pass.
+Per the pre-registered failure branch, a failing gate means changing the faithfulness metric or pivoting to a measurement-validity paper. It does not mean raising n_eval_images: the half-width falls as 1/sqrt(n), so passing by that route costs 100x the compute for a 10x narrowing and is a data-dependent protocol change besides.
+========================================================================
+config      /kaggle/working/shiftprofile/1/configs/pilot_validity.yaml
+cache read  /kaggle/working/cache
+cells       10
+imputation  mean, blur
+pairs       integrated_gradients vs integrated_gradients_rolled, grad_cam vs grad_cam_rolled
+roll seed   0
+
+==========================================================================
+TEST 1   does displacing the map FURTHER cost more?
+         gain = faithfulness(rolled) - faithfulness(explainer)
+         gain < 0 means the explainer beats its own displaced copy;
+         |gain| growing with distance means its aim is spatially
+         specific, not merely a differently shaped mask
+==========================================================================
+imputation      explainer              displ_px       gain    half_w      n
+mean            integrated_gradients       5.73   -0.05516   0.00511   2040
+mean            integrated_gradients       9.82   -0.06393   0.00543   2050
+mean            integrated_gradients      12.56   -0.07908   0.00562   2100
+mean            integrated_gradients      14.78   -0.09220   0.00608   2100
+mean            integrated_gradients      17.90   -0.09716   0.00590   2030
+mean            grad_cam                   5.73   -0.04502   0.00578   2040
+mean            grad_cam                   9.82   -0.08319   0.00790   2050
+mean            grad_cam                  12.56   -0.11710   0.00805   2100
+mean            grad_cam                  14.78   -0.15320   0.00877   2100
+mean            grad_cam                  17.90   -0.19522   0.00980   2030
+blur            integrated_gradients       5.73   -0.04601   0.00619   2040
+blur            integrated_gradients       9.82   -0.06652   0.00663   2050
+blur            integrated_gradients      12.56   -0.07036   0.00697   2100
+blur            integrated_gradients      14.78   -0.09083   0.00696   2100
+blur            integrated_gradients      17.90   -0.08622   0.00734   2030
+blur            grad_cam                   5.73   -0.02980   0.00491   2040
+blur            grad_cam                   9.82   -0.07327   0.00704   2050
+blur            grad_cam                  12.56   -0.10272   0.00789   2100
+blur            grad_cam                  14.78   -0.12464   0.00819   2100
+blur            grad_cam                  17.90   -0.15120   0.00988   2030
+
+  blur            grad_cam               -0.02980 -> -0.15120  |swing| +0.12140 vs half-width 0.00988   advantage GROWS with distance (beats its copy)
+  blur            integrated_gradients   -0.04601 -> -0.08622  |swing| +0.04021 vs half-width 0.00734   advantage GROWS with distance (beats its copy)
+  mean            grad_cam               -0.04502 -> -0.19522  |swing| +0.15020 vs half-width 0.00980   advantage GROWS with distance (beats its copy)
+  mean            integrated_gradients   -0.05516 -> -0.09716  |swing| +0.04200 vs half-width 0.00590   advantage GROWS with distance (beats its copy)
+
+==========================================================================
+TEST 2   faithfulness against mask geometry, all arms on one table
+         centre_distance: mask centroid's distance from frame centre
+         spread: how far masked pixels sit from their own centroid
+==========================================================================
+
+  imputation: blur   (ordered by mask spread)
+    explainer                       spread  centre  faithfulness  model-free
+    grad_cam                         3.298   6.128      +0.13129  
+    random_lowres_2                  3.967  16.017      +0.04503  yes
+    grad_cam_rolled                  6.188   9.265      +0.03448  
+    random_lowres_4                  6.511  10.994      +0.04118  yes
+    integrated_gradients             7.867   3.667      +0.07165  
+    integrated_gradients_rolled     10.470   5.117      -0.00008  
+    random_lowres_8                 10.897   6.229      +0.02645  yes
+    random                          12.112   1.594      -0.00002  yes
+    random_lowres_32                12.114   1.538      +0.01504  yes
+    random_lowres_16                12.120   3.433      +0.00698  yes
+    residual of each real arm against the model-free arms of nearest spread:
+      grad_cam                     vs random_lowres_2      (spread 3.30 vs 3.97)  residual +0.08626
+      grad_cam_rolled              vs random_lowres_4      (spread 6.19 vs 6.51)  residual -0.00670
+      integrated_gradients         vs random_lowres_4      (spread 7.87 vs 6.51)  residual +0.03046
+      integrated_gradients_rolled  vs random_lowres_8      (spread 10.47 vs 10.90)  residual -0.02653
+
+  imputation: mean   (ordered by mask spread)
+    explainer                       spread  centre  faithfulness  model-free
+    grad_cam                         3.298   6.128      -0.01719  
+    random_lowres_2                  3.967  16.017      -0.14856  yes
+    grad_cam_rolled                  6.188   9.265      -0.13650  
+    random_lowres_4                  6.511  10.994      -0.11924  yes
+    integrated_gradients             7.867   3.667      +0.02631  
+    integrated_gradients_rolled     10.470   5.117      -0.05159  
+    random_lowres_8                 10.897   6.229      -0.08881  yes
+    random                          12.112   1.594      -0.00001  yes
+    random_lowres_32                12.114   1.538      +0.00307  yes
+    random_lowres_16                12.120   3.433      -0.07261  yes
+    residual of each real arm against the model-free arms of nearest spread:
+      grad_cam                     vs random_lowres_2      (spread 3.30 vs 3.97)  residual +0.13137
+      grad_cam_rolled              vs random_lowres_4      (spread 6.19 vs 6.51)  residual -0.01726
+      integrated_gradients         vs random_lowres_4      (spread 7.87 vs 6.51)  residual +0.14555
+      integrated_gradients_rolled  vs random_lowres_8      (spread 10.47 vs 10.90)  residual +0.03722
+
+==========================================================================
+TEST 3   where in the removal curve the gap lives
+         probability kept by the explainer's mask minus by a rolled one
+==========================================================================
+
+  blur / grad_cam
+    fraction  explainer     rolled       gap
+        0.00     0.8526     0.8526   +0.0000
+        0.05     0.8102     0.8357   -0.0255
+        0.10     0.7632     0.8184   -0.0553
+        0.20     0.6787     0.7821   -0.1035
+        0.30     0.6086     0.7412   -0.1326
+        0.50     0.5040     0.6581   -0.1541
+        0.70     0.4513     0.5656   -0.1143
+        0.90     0.4274     0.4773   -0.0498
+        1.00     0.4245     0.4245   +0.0000
+    peak gap at fraction 0.50 (-0.1541)
+
+  blur / integrated_gradients
+    fraction  explainer     rolled       gap
+        0.00     0.8526     0.8526   +0.0000
+        0.05     0.7777     0.8393   -0.0616
+        0.10     0.7456     0.8260   -0.0804
+        0.20     0.7000     0.7981   -0.0981
+        0.30     0.6658     0.7674   -0.1016
+        0.50     0.6102     0.7012   -0.0909
+        0.70     0.5586     0.6281   -0.0696
+        0.90     0.4886     0.5250   -0.0364
+        1.00     0.4245     0.4245   +0.0000
+    peak gap at fraction 0.30 (-0.1016)
+
+  mean / grad_cam
+    fraction  explainer     rolled       gap
+        0.00     0.8526     0.8526   +0.0000
+        0.05     0.7009     0.7758   -0.0749
+        0.10     0.5729     0.7225   -0.1495
+        0.20     0.3866     0.6196   -0.2329
+        0.30     0.2812     0.5157   -0.2345
+        0.50     0.1934     0.3374   -0.1440
+        0.70     0.1421     0.2119   -0.0698
+        0.90     0.1141     0.1348   -0.0207
+        1.00     0.1030     0.1030   +0.0000
+    peak gap at fraction 0.30 (-0.2345)
+
+  mean / integrated_gradients
+    fraction  explainer     rolled       gap
+        0.00     0.8526     0.8526   +0.0000
+        0.05     0.5417     0.7118   -0.1701
+        0.10     0.4196     0.6161   -0.1965
+        0.20     0.2783     0.4526   -0.1744
+        0.30     0.2129     0.3352   -0.1223
+        0.50     0.1716     0.2269   -0.0552
+        0.70     0.1539     0.1855   -0.0316
+        0.90     0.1076     0.1177   -0.0101
+        1.00     0.1030     0.1030   +0.0000
+    peak gap at fraction 0.10 (-0.1965)
+
+==========================================================================
+
+### Seed 2 raw log
+
+  curves: 400 units, 3098s (7.7s/unit), at curves:resnet18:2:fog:5:random_lowres_32:black
+
+============================================================
+Completed 510 cells, skipped 0 cached, failed 0 cells
+Elapsed time: 9065.7s
+manifest written to /kaggle/working/cache/run_manifest.jsonl
+============================================================
+config      /kaggle/working/shiftprofile/1/configs/pilot_validity.yaml
+cache read  /kaggle/working/cache
+cells       10
+eval images 1000
+imputation  mean, blur, uniform_noise, black
+explainers  integrated_gradients, grad_cam, random, integrated_gradients_rolled, grad_cam_rolled, random_lowres_2, random_lowres_4, random_lowres_8, random_lowres_16, random_lowres_32
+
+========================================================================
+CALIBRATION  (10 cells, n=1000 images)
+========================================================================
+ sev   accuracy     brier    ece_em    ece_db      aurc
+   0     0.8620    0.2047    0.0566    0.0797    0.0264
+   1     0.8370    0.2469    0.0674    0.0925    0.0395
+   3     0.7273    0.4092    0.1281    0.1441    0.1181
+   5     0.5600    0.6764    0.2391    0.2589    0.2707
+
+========================================================================
+FAITHFULNESS  (random control AUC minus model AUC; >0 beats random)
+========================================================================
+
+  imputation: black
+    grad_cam               mean -0.05862   2/10 cells above 0  
+    grad_cam_rolled        mean -0.15544   1/10 cells above 0  
+    integrated_gradients   mean -0.03902   0/10 cells above 0  NO CELL BEATS RANDOM
+    integrated_gradients_rolled mean -0.03574   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean +0.00000   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean -0.03164   2/10 cells above 0  
+    random_lowres_2        mean -0.19694   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_32       mean +0.00476   3/10 cells above 0  
+    random_lowres_4        mean -0.14463   1/10 cells above 0  
+    random_lowres_8        mean -0.08048   2/10 cells above 0  
+
+  imputation: blur
+    grad_cam               mean +0.12671   10/10 cells above 0  
+    grad_cam_rolled        mean +0.02995   7/10 cells above 0  
+    integrated_gradients   mean +0.06888   10/10 cells above 0  
+    integrated_gradients_rolled mean -0.00196   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean +0.00003   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean +0.00664   3/10 cells above 0  
+    random_lowres_2        mean +0.03896   9/10 cells above 0  
+    random_lowres_32       mean +0.01391   8/10 cells above 0  
+    random_lowres_4        mean +0.03577   9/10 cells above 0  
+    random_lowres_8        mean +0.02057   8/10 cells above 0  
+
+  imputation: mean
+    grad_cam               mean -0.03106   2/10 cells above 0  
+    grad_cam_rolled        mean -0.14660   1/10 cells above 0  
+    integrated_gradients   mean +0.02684   9/10 cells above 0  
+    integrated_gradients_rolled mean -0.05072   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean -0.00002   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean -0.08051   1/10 cells above 0  
+    random_lowres_2        mean -0.15748   1/10 cells above 0  
+    random_lowres_32       mean -0.00025   2/10 cells above 0  
+    random_lowres_4        mean -0.12443   2/10 cells above 0  
+    random_lowres_8        mean -0.10051   2/10 cells above 0  
+
+  imputation: uniform_noise
+    grad_cam               mean -0.03637   0/10 cells above 0  NO CELL BEATS RANDOM
+    grad_cam_rolled        mean -0.16385   0/10 cells above 0  NO CELL BEATS RANDOM
+    integrated_gradients   mean +0.00664   5/10 cells above 0  
+    integrated_gradients_rolled mean -0.04529   0/10 cells above 0  NO CELL BEATS RANDOM
+    random                 mean -0.00001   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_16       mean -0.07237   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_2        mean -0.17998   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_32       mean -0.00007   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_4        mean -0.15032   0/10 cells above 0  NO CELL BEATS RANDOM
+    random_lowres_8        mean -0.11807   0/10 cells above 0  NO CELL BEATS RANDOM
+
+imputation      explainer               sev   faithfulness   half_width
+black           grad_cam                  0       -0.07692      0.02089
+black           grad_cam                  1       -0.07073      0.02069
+black           grad_cam                  3       -0.03720      0.02198
+black           grad_cam                  5       -0.06182      0.02185
+black           grad_cam_rolled           0       -0.20392      0.02070
+black           grad_cam_rolled           1       -0.18745      0.02070
+black           grad_cam_rolled           3       -0.13246      0.02218
+black           grad_cam_rolled           5       -0.13024      0.02164
+black           integrated_gradients      0       -0.04775      0.00665
+black           integrated_gradients      1       -0.04731      0.00693
+black           integrated_gradients      3       -0.03937      0.00681
+black           integrated_gradients      5       -0.02748      0.00621
+black           integrated_gradients_rolled    0       -0.04970      0.00643
+black           integrated_gradients_rolled    1       -0.04351      0.00626
+black           integrated_gradients_rolled    3       -0.03396      0.00663
+black           integrated_gradients_rolled    5       -0.02509      0.00595
+black           random                    0       -0.00002      0.00011
+black           random                    1       -0.00002      0.00011
+black           random                    3       +0.00001      0.00010
+black           random                    5       +0.00002      0.00012
+black           random_lowres_16          0       -0.05742      0.01239
+black           random_lowres_16          1       -0.04942      0.01256
+black           random_lowres_16          3       -0.02005      0.01324
+black           random_lowres_16          5       -0.01686      0.01213
+black           random_lowres_2           0       -0.24497      0.02074
+black           random_lowres_2           1       -0.23334      0.02082
+black           random_lowres_2           3       -0.17572      0.02177
+black           random_lowres_2           5       -0.16576      0.02094
+black           random_lowres_32          0       +0.00335      0.00574
+black           random_lowres_32          1       +0.00378      0.00569
+black           random_lowres_32          3       +0.00665      0.00551
+black           random_lowres_32          5       +0.00433      0.00521
+black           random_lowres_4           0       -0.18965      0.02102
+black           random_lowres_4           1       -0.17655      0.02064
+black           random_lowres_4           3       -0.12194      0.02135
+black           random_lowres_4           5       -0.12041      0.02074
+black           random_lowres_8           0       -0.12310      0.01794
+black           random_lowres_8           1       -0.10945      0.01839
+black           random_lowres_8           3       -0.06088      0.01877
+black           random_lowres_8           5       -0.05689      0.01738
+blur            grad_cam                  0       +0.12763      0.01249
+blur            grad_cam                  1       +0.12975      0.01300
+blur            grad_cam                  3       +0.13637      0.01303
+blur            grad_cam                  5       +0.11371      0.01304
+blur            grad_cam_rolled           0       +0.02896      0.01138
+blur            grad_cam_rolled           1       +0.02845      0.01172
+blur            grad_cam_rolled           3       +0.03275      0.01219
+blur            grad_cam_rolled           5       +0.02897      0.01207
+blur            integrated_gradients      0       +0.06358      0.00920
+blur            integrated_gradients      1       +0.06533      0.00934
+blur            integrated_gradients      3       +0.07629      0.00998
+blur            integrated_gradients      5       +0.06678      0.00939
+blur            integrated_gradients_rolled    0       -0.00285      0.00785
+blur            integrated_gradients_rolled    1       +0.00081      0.00812
+blur            integrated_gradients_rolled    3       -0.00134      0.00852
+blur            integrated_gradients_rolled    5       -0.00505      0.00825
+blur            random                    0       +0.00002      0.00009
+blur            random                    1       -0.00000      0.00011
+blur            random                    3       +0.00005      0.00013
+blur            random                    5       +0.00003      0.00013
+blur            random_lowres_16          0       +0.00607      0.00878
+blur            random_lowres_16          1       +0.00667      0.00924
+blur            random_lowres_16          3       +0.00482      0.00962
+blur            random_lowres_16          5       +0.00863      0.00920
+blur            random_lowres_2           0       +0.04078      0.01076
+blur            random_lowres_2           1       +0.04009      0.01101
+blur            random_lowres_2           3       +0.04041      0.01170
+blur            random_lowres_2           5       +0.03577      0.01147
+blur            random_lowres_32          0       +0.01441      0.00712
+blur            random_lowres_32          1       +0.01747      0.00724
+blur            random_lowres_32          3       +0.01376      0.00740
+blur            random_lowres_32          5       +0.01033      0.00713
+blur            random_lowres_4           0       +0.03556      0.01084
+blur            random_lowres_4           1       +0.03493      0.01157
+blur            random_lowres_4           3       +0.03726      0.01187
+blur            random_lowres_4           5       +0.03521      0.01158
+blur            random_lowres_8           0       +0.01676      0.01015
+blur            random_lowres_8           1       +0.01533      0.01092
+blur            random_lowres_8           3       +0.02372      0.01141
+blur            random_lowres_8           5       +0.02394      0.01122
+mean            grad_cam                  0       -0.06282      0.01718
+mean            grad_cam                  1       -0.05124      0.01702
+mean            grad_cam                  3       -0.01677      0.01838
+mean            grad_cam                  5       -0.01460      0.01872
+mean            grad_cam_rolled           0       -0.20544      0.01956
+mean            grad_cam_rolled           1       -0.18711      0.01958
+mean            grad_cam_rolled           3       -0.12968      0.02011
+mean            grad_cam_rolled           5       -0.10340      0.02015
+mean            integrated_gradients      0       +0.02998      0.00740
+mean            integrated_gradients      1       +0.03098      0.00717
+mean            integrated_gradients      3       +0.03025      0.00753
+mean            integrated_gradients      5       +0.01824      0.00702
+mean            integrated_gradients_rolled    0       -0.06896      0.00768
+mean            integrated_gradients_rolled    1       -0.06155      0.00786
+mean            integrated_gradients_rolled    3       -0.04496      0.00803
+mean            integrated_gradients_rolled    5       -0.03957      0.00784
+mean            random                    0       +0.00001      0.00013
+mean            random                    1       -0.00004      0.00013
+mean            random                    3       -0.00008      0.00017
+mean            random                    5       +0.00004      0.00018
+mean            random_lowres_16          0       -0.11999      0.01260
+mean            random_lowres_16          1       -0.10713      0.01300
+mean            random_lowres_16          3       -0.07030      0.01333
+mean            random_lowres_16          5       -0.05095      0.01307
+mean            random_lowres_2           0       -0.21256      0.01800
+mean            random_lowres_2           1       -0.19791      0.01846
+mean            random_lowres_2           3       -0.14165      0.01924
+mean            random_lowres_2           5       -0.11452      0.01918
+mean            random_lowres_32          0       -0.00474      0.00583
+mean            random_lowres_32          1       -0.00249      0.00583
+mean            random_lowres_32          3       +0.00174      0.00627
+mean            random_lowres_32          5       +0.00149      0.00563
+mean            random_lowres_4           0       -0.17749      0.01909
+mean            random_lowres_4           1       -0.16343      0.01902
+mean            random_lowres_4           3       -0.10821      0.01980
+mean            random_lowres_4           5       -0.08396      0.01951
+mean            random_lowres_8           0       -0.15153      0.01807
+mean            random_lowres_8           1       -0.13855      0.01818
+mean            random_lowres_8           3       -0.08663      0.01851
+mean            random_lowres_8           5       -0.05935      0.01775
+uniform_noise   grad_cam                  0       -0.06311      0.00887
+uniform_noise   grad_cam                  1       -0.05260      0.00897
+uniform_noise   grad_cam                  3       -0.03205      0.00885
+uniform_noise   grad_cam                  5       -0.01554      0.00835
+uniform_noise   grad_cam_rolled           0       -0.21514      0.01266
+uniform_noise   grad_cam_rolled           1       -0.19927      0.01315
+uniform_noise   grad_cam_rolled           3       -0.15557      0.01354
+uniform_noise   grad_cam_rolled           5       -0.11959      0.01261
+uniform_noise   integrated_gradients      0       +0.00935      0.00514
+uniform_noise   integrated_gradients      1       +0.01138      0.00504
+uniform_noise   integrated_gradients      3       +0.00507      0.00527
+uniform_noise   integrated_gradients      5       +0.00256      0.00521
+uniform_noise   integrated_gradients_rolled    0       -0.05966      0.00630
+uniform_noise   integrated_gradients_rolled    1       -0.05347      0.00607
+uniform_noise   integrated_gradients_rolled    3       -0.04145      0.00629
+uniform_noise   integrated_gradients_rolled    5       -0.03617      0.00588
+uniform_noise   random                    0       +0.00001      0.00013
+uniform_noise   random                    1       -0.00003      0.00012
+uniform_noise   random                    3       -0.00002      0.00011
+uniform_noise   random                    5       +0.00000      0.00011
+uniform_noise   random_lowres_16          0       -0.09656      0.00784
+uniform_noise   random_lowres_16          1       -0.08876      0.00781
+uniform_noise   random_lowres_16          3       -0.06768      0.00774
+uniform_noise   random_lowres_16          5       -0.05261      0.00725
+uniform_noise   random_lowres_2           0       -0.22722      0.01236
+uniform_noise   random_lowres_2           1       -0.21578      0.01248
+uniform_noise   random_lowres_2           3       -0.16993      0.01269
+uniform_noise   random_lowres_2           5       -0.13848      0.01155
+uniform_noise   random_lowres_32          0       +0.00067      0.00370
+uniform_noise   random_lowres_32          1       -0.00007      0.00375
+uniform_noise   random_lowres_32          3       +0.00005      0.00386
+uniform_noise   random_lowres_32          5       -0.00042      0.00378
+uniform_noise   random_lowres_4           0       -0.19542      0.01193
+uniform_noise   random_lowres_4           1       -0.18287      0.01215
+uniform_noise   random_lowres_4           3       -0.14224      0.01230
+uniform_noise   random_lowres_4           5       -0.11081      0.01148
+uniform_noise   random_lowres_8           0       -0.15774      0.01065
+uniform_noise   random_lowres_8           1       -0.14781      0.01060
+uniform_noise   random_lowres_8           3       -0.11073      0.01060
+uniform_noise   random_lowres_8           5       -0.08246      0.01013
+
+========================================================================
+GEOMETRY LADDER   random_lowres_<grid>: noise on a grid x grid
+                  lattice, upsampled as Grad-CAM is. No model input.
+========================================================================
+imputation       grid   faithfulness   half_width
+black               2       -0.19694      0.02113
+black               4       -0.14463      0.02092
+black               8       -0.08048      0.01815
+black              16       -0.03164      0.01262
+black              32       +0.00476      0.00550
+blur                2       +0.03896      0.01133
+blur                4       +0.03577      0.01159
+blur                8       +0.02057      0.01108
+blur               16       +0.00664      0.00930
+blur               32       +0.01391      0.00725
+mean                2       -0.15748      0.01886
+mean                4       -0.12443      0.01941
+mean                8       -0.10051      0.01814
+mean               16       -0.08051      0.01308
+mean               32       -0.00025      0.00590
+uniform_noise       2       -0.17998      0.01225
+uniform_noise       4       -0.15032      0.01197
+uniform_noise       8       -0.11807      0.01046
+uniform_noise      16       -0.07237      0.00763
+uniform_noise      32       -0.00007      0.00379
+
+Grad-CAM's map is 4x4 on ResNet-18. If its faithfulness sits on this
+curve at grid=4, its score is its resolution and not its content.
+
+========================================================================
+GEOMETRY-MATCHED FAITHFULNESS   explainer minus a control of the
+                                same mask geometry; >0 beats it
+========================================================================
+imputation      explainer                vs                   kind          matched     half_w  verdict
+black           grad_cam                 grad_cam_rolled      alignment    +0.09682    0.01174  10/10 cells beat it
+black           grad_cam                 random_lowres_4      geometry     +0.08602    0.01134  10/10 cells beat it
+black           integrated_gradients     integrated_gradients_rolled alignment    -0.00328    0.00594  NO CELL BEATS ITS MATCHED CONTROL
+blur            grad_cam                 grad_cam_rolled      alignment    +0.09676    0.01133  10/10 cells beat it
+blur            grad_cam                 random_lowres_4      geometry     +0.09094    0.01037  10/10 cells beat it
+blur            integrated_gradients     integrated_gradients_rolled alignment    +0.07084    0.00975  10/10 cells beat it
+mean            grad_cam                 grad_cam_rolled      alignment    +0.11554    0.01210  10/10 cells beat it
+mean            grad_cam                 random_lowres_4      geometry     +0.09337    0.01172  10/10 cells beat it
+mean            integrated_gradients     integrated_gradients_rolled alignment    +0.07756    0.00810  10/10 cells beat it
+uniform_noise   grad_cam                 grad_cam_rolled      alignment    +0.12748    0.01205  10/10 cells beat it
+uniform_noise   grad_cam                 random_lowres_4      geometry     +0.11395    0.01118  10/10 cells beat it
+uniform_noise   integrated_gradients     integrated_gradients_rolled alignment    +0.05194    0.00651  10/10 cells beat it
+
+The pixel-i.i.d. control cancels exactly in this difference: both terms
+use the same control_seed over the same images, so what is left is the
+explainer scored against its own geometry.
+
+========================================================================
+P3 GATE (RAW)   half-width < 10% of the clean-to-severity-5 change
+                on `faithfulness`: the explainer against a pixel-iid
+                control. The validity run showed that quantity tracks
+                mask geometry -- a model-free blob scores well below
+                zero on it -- so this table is reported, not read.
+========================================================================
+imputation      explainer                   family               change     half_w     ratio  verdict
+black           grad_cam                    defocus_blur       -0.11739    0.02089     0.178  FAIL
+black           grad_cam                    fog                -0.06170    0.02089     0.338  FAIL
+black           grad_cam                    gaussian_noise     +0.22439    0.02553     0.114  FAIL
+black           grad_cam_rolled             defocus_blur       -0.05044    0.02070     0.410  FAIL
+black           grad_cam_rolled             fog                +0.00722    0.02070       n/a  no change
+black           grad_cam_rolled             gaussian_noise     +0.26427    0.02532     0.096  PASS
+black           integrated_gradients        defocus_blur       +0.00129    0.00665       n/a  no change
+black           integrated_gradients        fog                +0.01971    0.00665     0.337  FAIL
+black           integrated_gradients        gaussian_noise     +0.03980    0.00665     0.167  FAIL
+black           integrated_gradients_rolled defocus_blur       +0.00635    0.00643       n/a  no change
+black           integrated_gradients_rolled fog                +0.01899    0.00643     0.339  FAIL
+black           integrated_gradients_rolled gaussian_noise     +0.04848    0.00643     0.133  FAIL
+black           random                      defocus_blur       +0.00002    0.00011       n/a  no change
+black           random                      fog                +0.00004    0.00011       n/a  no change
+black           random                      gaussian_noise     +0.00004    0.00016       n/a  no change
+black           random_lowres_16            defocus_blur       -0.02475    0.01239     0.501  FAIL
+black           random_lowres_16            fog                +0.01989    0.01239     0.623  FAIL
+black           random_lowres_16            gaussian_noise     +0.12655    0.01379     0.109  FAIL
+black           random_lowres_2             defocus_blur       -0.03210    0.02074     0.646  FAIL
+black           random_lowres_2             fog                +0.00154    0.02074       n/a  no change
+black           random_lowres_2             gaussian_noise     +0.26819    0.02607     0.097  PASS
+black           random_lowres_32            defocus_blur       -0.01052    0.00574     0.546  FAIL
+black           random_lowres_32            fog                -0.00558    0.00574       n/a  no change
+black           random_lowres_32            gaussian_noise     +0.01904    0.00649     0.341  FAIL
+black           random_lowres_4             defocus_blur       -0.05412    0.02102     0.388  FAIL
+black           random_lowres_4             fog                +0.01141    0.02102       n/a  no change
+black           random_lowres_4             gaussian_noise     +0.25045    0.02429     0.097  PASS
+black           random_lowres_8             defocus_blur       -0.03001    0.01794     0.598  FAIL
+black           random_lowres_8             fog                +0.02687    0.01794     0.668  FAIL
+black           random_lowres_8             gaussian_noise     +0.20175    0.02092     0.104  FAIL
+blur            grad_cam                    defocus_blur       -0.08107    0.01249     0.154  FAIL
+blur            grad_cam                    fog                -0.01621    0.01249     0.770  FAIL
+blur            grad_cam                    gaussian_noise     +0.05555    0.01547     0.279  FAIL
+blur            grad_cam_rolled             defocus_blur       -0.03608    0.01138     0.315  FAIL
+blur            grad_cam_rolled             fog                -0.02245    0.01138     0.507  FAIL
+blur            grad_cam_rolled             gaussian_noise     +0.05858    0.01465     0.250  FAIL
+blur            integrated_gradients        defocus_blur       -0.01448    0.00920     0.636  FAIL
+blur            integrated_gradients        fog                +0.03200    0.00920     0.287  FAIL
+blur            integrated_gradients        gaussian_noise     -0.00792    0.01111       n/a  no change
+blur            integrated_gradients_rolled defocus_blur       -0.00687    0.00785       n/a  no change
+blur            integrated_gradients_rolled fog                +0.00261    0.00817       n/a  no change
+blur            integrated_gradients_rolled gaussian_noise     -0.00236    0.01017       n/a  no change
+blur            random                      defocus_blur       +0.00006    0.00011       n/a  no change
+blur            random                      fog                +0.00005    0.00015       n/a  no change
+blur            random                      gaussian_noise     -0.00007    0.00014       n/a  no change
+blur            random_lowres_16            defocus_blur       -0.01425    0.00878     0.616  FAIL
+blur            random_lowres_16            fog                -0.00650    0.00878       n/a  no change
+blur            random_lowres_16            gaussian_noise     +0.02844    0.01111     0.391  FAIL
+blur            random_lowres_2             defocus_blur       -0.04320    0.01076     0.249  FAIL
+blur            random_lowres_2             fog                -0.02227    0.01076     0.483  FAIL
+blur            random_lowres_2             gaussian_noise     +0.05044    0.01371     0.272  FAIL
+blur            random_lowres_32            defocus_blur       -0.01283    0.00712     0.555  FAIL
+blur            random_lowres_32            fog                -0.00743    0.00712     0.958  FAIL
+blur            random_lowres_32            gaussian_noise     +0.00804    0.00915       n/a  no change
+blur            random_lowres_4             defocus_blur       -0.04310    0.01084     0.252  FAIL
+blur            random_lowres_4             fog                -0.01713    0.01084     0.633  FAIL
+blur            random_lowres_4             gaussian_noise     +0.05919    0.01447     0.244  FAIL
+blur            random_lowres_8             defocus_blur       -0.02245    0.01015     0.452  FAIL
+blur            random_lowres_8             fog                -0.00519    0.01068       n/a  no change
+blur            random_lowres_8             gaussian_noise     +0.04916    0.01383     0.281  FAIL
+mean            grad_cam                    defocus_blur       -0.06533    0.01718     0.263  FAIL
+mean            grad_cam                    fog                -0.01894    0.01718     0.907  FAIL
+mean            grad_cam                    gaussian_noise     +0.22894    0.02344     0.102  FAIL
+mean            grad_cam_rolled             defocus_blur       -0.01494    0.01956       n/a  no change
+mean            grad_cam_rolled             fog                +0.02873    0.01956     0.681  FAIL
+mean            grad_cam_rolled             gaussian_noise     +0.29234    0.02613     0.089  PASS
+mean            integrated_gradients        defocus_blur       -0.03555    0.00740     0.208  FAIL
+mean            integrated_gradients        fog                -0.01797    0.00740     0.412  FAIL
+mean            integrated_gradients        gaussian_noise     +0.01830    0.00769     0.420  FAIL
+mean            integrated_gradients_rolled defocus_blur       +0.00938    0.00782     0.833  FAIL
+mean            integrated_gradients_rolled fog                +0.01639    0.00788     0.481  FAIL
+mean            integrated_gradients_rolled gaussian_noise     +0.06237    0.00783     0.126  FAIL
+mean            random                      defocus_blur       +0.00006    0.00015       n/a  no change
+mean            random                      fog                +0.00010    0.00024       n/a  no change
+mean            random                      gaussian_noise     -0.00006    0.00015       n/a  no change
+mean            random_lowres_16            defocus_blur       +0.01065    0.01260       n/a  no change
+mean            random_lowres_16            fog                +0.03900    0.01260     0.323  FAIL
+mean            random_lowres_16            gaussian_noise     +0.15747    0.01557     0.099  PASS
+mean            random_lowres_2             defocus_blur       -0.01089    0.01800       n/a  no change
+mean            random_lowres_2             fog                +0.01910    0.01800     0.942  FAIL
+mean            random_lowres_2             gaussian_noise     +0.28592    0.02485     0.087  PASS
+mean            random_lowres_32            defocus_blur       -0.00575    0.00583       n/a  no change
+mean            random_lowres_32            fog                +0.00897    0.00583     0.650  FAIL
+mean            random_lowres_32            gaussian_noise     +0.01547    0.00610     0.395  FAIL
+mean            random_lowres_4             defocus_blur       -0.02594    0.01909     0.736  FAIL
+mean            random_lowres_4             fog                +0.02354    0.01909     0.811  FAIL
+mean            random_lowres_4             gaussian_noise     +0.28298    0.02501     0.088  PASS
+mean            random_lowres_8             defocus_blur       +0.00054    0.01807       n/a  no change
+mean            random_lowres_8             fog                +0.02892    0.01807     0.625  FAIL
+mean            random_lowres_8             gaussian_noise     +0.24707    0.02291     0.093  PASS
+uniform_noise   grad_cam                    defocus_blur       +0.03125    0.00887     0.284  FAIL
+uniform_noise   grad_cam                    fog                +0.03929    0.00887     0.226  FAIL
+uniform_noise   grad_cam                    gaussian_noise     +0.07215    0.00950     0.132  FAIL
+uniform_noise   grad_cam_rolled             defocus_blur       +0.05385    0.01266     0.235  FAIL
+uniform_noise   grad_cam_rolled             fog                +0.06987    0.01266     0.181  FAIL
+uniform_noise   grad_cam_rolled             gaussian_noise     +0.16291    0.01437     0.088  PASS
+uniform_noise   integrated_gradients        defocus_blur       -0.02057    0.00546     0.265  FAIL
+uniform_noise   integrated_gradients        fog                -0.01294    0.00542     0.419  FAIL
+uniform_noise   integrated_gradients        gaussian_noise     +0.01315    0.00514     0.391  FAIL
+uniform_noise   integrated_gradients_rolled defocus_blur       +0.01286    0.00630     0.490  FAIL
+uniform_noise   integrated_gradients_rolled fog                +0.01333    0.00630     0.473  FAIL
+uniform_noise   integrated_gradients_rolled gaussian_noise     +0.04429    0.00630     0.142  FAIL
+uniform_noise   random                      defocus_blur       -0.00005    0.00013       n/a  no change
+uniform_noise   random                      fog                -0.00000    0.00013       n/a  no change
+uniform_noise   random                      gaussian_noise     +0.00004    0.00013       n/a  no change
+uniform_noise   random_lowres_16            defocus_blur       +0.02323    0.00784     0.338  FAIL
+uniform_noise   random_lowres_16            fog                +0.04044    0.00784     0.194  FAIL
+uniform_noise   random_lowres_16            gaussian_noise     +0.06818    0.00784     0.115  FAIL
+uniform_noise   random_lowres_2             defocus_blur       +0.05273    0.01236     0.234  FAIL
+uniform_noise   random_lowres_2             fog                +0.05210    0.01236     0.237  FAIL
+uniform_noise   random_lowres_2             gaussian_noise     +0.16139    0.01363     0.084  PASS
+uniform_noise   random_lowres_32            defocus_blur       -0.00263    0.00379       n/a  no change
+uniform_noise   random_lowres_32            fog                +0.00048    0.00370       n/a  no change
+uniform_noise   random_lowres_32            gaussian_noise     -0.00113    0.00392       n/a  no change
+uniform_noise   random_lowres_4             defocus_blur       +0.04780    0.01193     0.250  FAIL
+uniform_noise   random_lowres_4             fog                +0.06527    0.01193     0.183  FAIL
+uniform_noise   random_lowres_4             gaussian_noise     +0.14075    0.01323     0.094  PASS
+uniform_noise   random_lowres_8             defocus_blur       +0.04131    0.01065     0.258  FAIL
+uniform_noise   random_lowres_8             fog                +0.06589    0.01065     0.162  FAIL
+uniform_noise   random_lowres_8             gaussian_noise     +0.11865    0.01090     0.092  PASS
+
+GATE (RAW): 12/87 resolvable pairs pass.
+Per the pre-registered failure branch, a failing gate means changing the faithfulness metric or pivoting to a measurement-validity paper. It does not mean raising n_eval_images: the half-width falls as 1/sqrt(n), so passing by that route costs 100x the compute for a 10x narrowing and is a data-dependent protocol change besides.
+========================================================================
+
+========================================================================
+P3 GATE (GEOMETRY-MATCHED)
+   half-width < 10% of the clean-to-severity-5 change in `matched`:
+   the explainer minus a control of its OWN mask geometry.
+   THIS is the gate the 1000-vs-2000 decision reads. The raw
+   gate above gates a quantity the validity run showed
+   confounded, so neither its passes nor its failures bear on
+   that decision.
+========================================================================
+imputation      explainer vs reference                              family               change     half_w     ratio  verdict
+black           grad_cam vs grad_cam_rolled                         defocus_blur       -0.06695    0.01219     0.182  FAIL
+black           grad_cam vs grad_cam_rolled                         fog                -0.06892    0.01219     0.177  FAIL
+black           grad_cam vs grad_cam_rolled                         gaussian_noise     -0.03988    0.01219     0.306  FAIL
+black           grad_cam vs random_lowres_4                         defocus_blur       -0.06327    0.01192     0.188  FAIL
+black           grad_cam vs random_lowres_4                         fog                -0.07311    0.01192     0.163  FAIL
+black           grad_cam vs random_lowres_4                         gaussian_noise     -0.02606    0.01192     0.457  FAIL
+black           integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.00506    0.00630       n/a  no change
+black           integrated_gradients vs integrated_gradients_rolled fog                +0.00072    0.00630       n/a  no change
+black           integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.00868    0.00637     0.734  FAIL
+blur            grad_cam vs grad_cam_rolled                         defocus_blur       -0.04500    0.01130     0.251  FAIL
+blur            grad_cam vs grad_cam_rolled                         fog                +0.00624    0.01130       n/a  no change
+blur            grad_cam vs grad_cam_rolled                         gaussian_noise     -0.00303    0.01273       n/a  no change
+blur            grad_cam vs random_lowres_4                         defocus_blur       -0.03798    0.01007     0.265  FAIL
+blur            grad_cam vs random_lowres_4                         fog                +0.00092    0.01015       n/a  no change
+blur            grad_cam vs random_lowres_4                         gaussian_noise     -0.00364    0.01180       n/a  no change
+blur            integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.00761    0.00999       n/a  no change
+blur            integrated_gradients vs integrated_gradients_rolled fog                +0.02939    0.00999     0.340  FAIL
+blur            integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.00556    0.01086       n/a  no change
+mean            grad_cam vs grad_cam_rolled                         defocus_blur       -0.05039    0.01267     0.251  FAIL
+mean            grad_cam vs grad_cam_rolled                         fog                -0.04767    0.01234     0.259  FAIL
+mean            grad_cam vs grad_cam_rolled                         gaussian_noise     -0.06340    0.01234     0.195  FAIL
+mean            grad_cam vs random_lowres_4                         defocus_blur       -0.03939    0.01269     0.322  FAIL
+mean            grad_cam vs random_lowres_4                         fog                -0.04248    0.01207     0.284  FAIL
+mean            grad_cam vs random_lowres_4                         gaussian_noise     -0.05404    0.01207     0.223  FAIL
+mean            integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.04493    0.00854     0.190  FAIL
+mean            integrated_gradients vs integrated_gradients_rolled fog                -0.03436    0.00854     0.249  FAIL
+mean            integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.04407    0.00854     0.194  FAIL
+uniform_noise   grad_cam vs grad_cam_rolled                         defocus_blur       -0.02260    0.01214     0.537  FAIL
+uniform_noise   grad_cam vs grad_cam_rolled                         fog                -0.03058    0.01214     0.397  FAIL
+uniform_noise   grad_cam vs grad_cam_rolled                         gaussian_noise     -0.09076    0.01214     0.134  FAIL
+uniform_noise   grad_cam vs random_lowres_4                         defocus_blur       -0.01655    0.01176     0.710  FAIL
+uniform_noise   grad_cam vs random_lowres_4                         fog                -0.02598    0.01176     0.453  FAIL
+uniform_noise   grad_cam vs random_lowres_4                         gaussian_noise     -0.06860    0.01176     0.171  FAIL
+uniform_noise   integrated_gradients vs integrated_gradients_rolled defocus_blur       -0.03343    0.00670     0.201  FAIL
+uniform_noise   integrated_gradients vs integrated_gradients_rolled fog                -0.02627    0.00664     0.253  FAIL
+uniform_noise   integrated_gradients vs integrated_gradients_rolled gaussian_noise     -0.03114    0.00664     0.213  FAIL
+
+GATE (GEOMETRY-MATCHED): 0/28 resolvable pairs pass.
+Per the pre-registered failure branch, a failing gate means changing the faithfulness metric or pivoting to a measurement-validity paper. It does not mean raising n_eval_images: the half-width falls as 1/sqrt(n), so passing by that route costs 100x the compute for a 10x narrowing and is a data-dependent protocol change besides.
+========================================================================
+config      /kaggle/working/shiftprofile/1/configs/pilot_validity.yaml
+cache read  /kaggle/working/cache
+cells       10
+imputation  mean, blur
+pairs       integrated_gradients vs integrated_gradients_rolled, grad_cam vs grad_cam_rolled
+roll seed   0
+
+==========================================================================
+TEST 1   does displacing the map FURTHER cost more?
+         gain = faithfulness(rolled) - faithfulness(explainer)
+         gain < 0 means the explainer beats its own displaced copy;
+         |gain| growing with distance means its aim is spatially
+         specific, not merely a differently shaped mask
+==========================================================================
+imputation      explainer              displ_px       gain    half_w      n
+mean            integrated_gradients       5.73   -0.05617   0.00527   2040
+mean            integrated_gradients       9.82   -0.06845   0.00569   2050
+mean            integrated_gradients      12.56   -0.07987   0.00549   2100
+mean            integrated_gradients      14.78   -0.08287   0.00581   2100
+mean            integrated_gradients      17.90   -0.09853   0.00626   2030
+mean            grad_cam                   5.73   -0.04722   0.00596   2040
+mean            grad_cam                   9.82   -0.08914   0.00801   2050
+mean            grad_cam                  12.56   -0.11157   0.00810   2100
+mean            grad_cam                  14.78   -0.13065   0.00931   2100
+mean            grad_cam                  17.90   -0.19531   0.00982   2030
+blur            integrated_gradients       5.73   -0.05501   0.00659   2040
+blur            integrated_gradients       9.82   -0.06789   0.00688   2050
+blur            integrated_gradients      12.56   -0.06914   0.00652   2100
+blur            integrated_gradients      14.78   -0.07967   0.00705   2100
+blur            integrated_gradients      17.90   -0.08670   0.00700   2030
+blur            grad_cam                   5.73   -0.02960   0.00461   2040
+blur            grad_cam                   9.82   -0.07461   0.00726   2050
+blur            grad_cam                  12.56   -0.10019   0.00764   2100
+blur            grad_cam                  14.78   -0.12302   0.00855   2100
+blur            grad_cam                  17.90   -0.15353   0.00989   2030
+
+  blur            grad_cam               -0.02960 -> -0.15353  |swing| +0.12393 vs half-width 0.00989   advantage GROWS with distance (beats its copy)
+  blur            integrated_gradients   -0.05501 -> -0.08670  |swing| +0.03168 vs half-width 0.00700   advantage GROWS with distance (beats its copy)
+  mean            grad_cam               -0.04722 -> -0.19531  |swing| +0.14809 vs half-width 0.00982   advantage GROWS with distance (beats its copy)
+  mean            integrated_gradients   -0.05617 -> -0.09853  |swing| +0.04236 vs half-width 0.00626   advantage GROWS with distance (beats its copy)
+
+==========================================================================
+TEST 2   faithfulness against mask geometry, all arms on one table
+         centre_distance: mask centroid's distance from frame centre
+         spread: how far masked pixels sit from their own centroid
+==========================================================================
+
+  imputation: blur   (ordered by mask spread)
+    explainer                       spread  centre  faithfulness  model-free
+    grad_cam                         3.295   6.046      +0.12671  
+    random_lowres_2                  3.967  16.017      +0.03896  yes
+    grad_cam_rolled                  6.170   9.254      +0.02995  
+    random_lowres_4                  6.511  10.994      +0.03577  yes
+    integrated_gradients             7.951   3.664      +0.06888  
+    integrated_gradients_rolled     10.569   5.008      -0.00196  
+    random_lowres_8                 10.897   6.229      +0.02057  yes
+    random                          12.112   1.594      +0.00003  yes
+    random_lowres_32                12.114   1.538      +0.01391  yes
+    random_lowres_16                12.120   3.433      +0.00664  yes
+    residual of each real arm against the model-free arms of nearest spread:
+      grad_cam                     vs random_lowres_2      (spread 3.29 vs 3.97)  residual +0.08775
+      grad_cam_rolled              vs random_lowres_4      (spread 6.17 vs 6.51)  residual -0.00583
+      integrated_gradients         vs random_lowres_4      (spread 7.95 vs 6.51)  residual +0.03310
+      integrated_gradients_rolled  vs random_lowres_8      (spread 10.57 vs 10.90)  residual -0.02253
+
+  imputation: mean   (ordered by mask spread)
+    explainer                       spread  centre  faithfulness  model-free
+    grad_cam                         3.295   6.046      -0.03106  
+    random_lowres_2                  3.967  16.017      -0.15748  yes
+    grad_cam_rolled                  6.170   9.254      -0.14660  
+    random_lowres_4                  6.511  10.994      -0.12443  yes
+    integrated_gradients             7.951   3.664      +0.02684  
+    integrated_gradients_rolled     10.569   5.008      -0.05072  
+    random_lowres_8                 10.897   6.229      -0.10051  yes
+    random                          12.112   1.594      -0.00002  yes
+    random_lowres_32                12.114   1.538      -0.00025  yes
+    random_lowres_16                12.120   3.433      -0.08051  yes
+    residual of each real arm against the model-free arms of nearest spread:
+      grad_cam                     vs random_lowres_2      (spread 3.29 vs 3.97)  residual +0.12642
+      grad_cam_rolled              vs random_lowres_4      (spread 6.17 vs 6.51)  residual -0.02217
+      integrated_gradients         vs random_lowres_4      (spread 7.95 vs 6.51)  residual +0.15127
+      integrated_gradients_rolled  vs random_lowres_8      (spread 10.57 vs 10.90)  residual +0.04979
+
+==========================================================================
+TEST 3   where in the removal curve the gap lives
+         probability kept by the explainer's mask minus by a rolled one
+==========================================================================
+
+  blur / grad_cam
+    fraction  explainer     rolled       gap
+        0.00     0.8587     0.8587   +0.0000
+        0.05     0.8154     0.8409   -0.0255
+        0.10     0.7651     0.8230   -0.0579
+        0.20     0.6835     0.7842   -0.1007
+        0.30     0.6145     0.7429   -0.1284
+        0.50     0.5079     0.6610   -0.1531
+        0.70     0.4555     0.5774   -0.1219
+        0.90     0.4375     0.4829   -0.0454
+        1.00     0.4346     0.4346   +0.0000
+    peak gap at fraction 0.50 (-0.1531)
+
+  blur / integrated_gradients
+    fraction  explainer     rolled       gap
+        0.00     0.8587     0.8587   +0.0000
+        0.05     0.7868     0.8455   -0.0588
+        0.10     0.7519     0.8315   -0.0796
+        0.20     0.7044     0.7999   -0.0956
+        0.30     0.6663     0.7684   -0.1021
+        0.50     0.6102     0.7022   -0.0920
+        0.70     0.5619     0.6309   -0.0690
+        0.90     0.4953     0.5276   -0.0323
+        1.00     0.4346     0.4346   +0.0000
+    peak gap at fraction 0.30 (-0.1021)
+
+  mean / grad_cam
+    fraction  explainer     rolled       gap
+        0.00     0.8587     0.8587   +0.0000
+        0.05     0.6974     0.7807   -0.0833
+        0.10     0.5783     0.7246   -0.1463
+        0.20     0.4067     0.6205   -0.2138
+        0.30     0.3090     0.5231   -0.2141
+        0.50     0.1965     0.3436   -0.1471
+        0.70     0.1463     0.2191   -0.0728
+        0.90     0.1205     0.1399   -0.0195
+        1.00     0.0924     0.0924   +0.0000
+    peak gap at fraction 0.30 (-0.2141)
+
+  mean / integrated_gradients
+    fraction  explainer     rolled       gap
+        0.00     0.8587     0.8587   +0.0000
+        0.05     0.5324     0.7110   -0.1786
+        0.10     0.4069     0.6071   -0.2003
+        0.20     0.2631     0.4451   -0.1820
+        0.30     0.2023     0.3271   -0.1248
+        0.50     0.1633     0.2137   -0.0504
+        0.70     0.1539     0.1794   -0.0255
+        0.90     0.1118     0.1220   -0.0102
+        1.00     0.0924     0.0924   +0.0000
+    peak gap at fraction 0.10 (-0.2003)
 
 ==========================================================================

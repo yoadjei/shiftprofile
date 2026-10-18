@@ -1046,3 +1046,150 @@ here**. H1 and H2 need no such grid: they are resolved, and what they need is se
 **Operational note, recorded because it is the second time.** CIFAR-10 was downloaded inside the
 session again, 51:15 against the previous run's 22:42, so roughly 51 minutes of the 2.42-hour session
 was a download that mounting a dataset removes entirely.
+
+---
+
+| Date | Section | Change | Reason | Data seen at time of amendment |
+|---|---|---|---|---|
+| 2026-10-18 | §2, H1a | Recorded as **supported under two schemes, marginal under the primary scheme, and against under `blur`** | A11 | P3b.4 replication: seeds 1 and 2 at `bf477ec`, 510 units each, 0 failed, 8854.9s and 9065.7s |
+| 2026-10-18 | §2, H2a | Recorded as **replicated exactly**, including the identity of the disagreeing cells | A11 | As above |
+| 2026-10-18 | §4, row 3 | A10's decision stands and is now a three-seed result | A11 | As above |
+| 2026-10-18 | §9 freeze table | P3b.4 discharged. One row added: H1a's paired bootstrap is not implemented | A11 | As above |
+
+**A11 — P3b.4 is run, and the instrument's claims replicate while H1a's primary-scheme test does not resolve.**
+Seeds 1 and 2 were run with `--seeds 1` and `--seeds 2` at `bf477ec`. Logs:
+`docs/runs/2026-10-18_seed1.log`, `docs/runs/2026-10-18_seed2.log`, with seed 0 at
+`docs/runs/2026-10-15b_curves-v3_with_matched_gate.log`.
+
+Neither session had the cache attached, so each retrained from scratch and shared nothing with the
+others but the code and the committed fixed evaluation indices. That cost about an hour of download per
+session and makes the three runs *more* independent than P3b.4 required, which is the direction one
+would want the accident to go.
+
+**What replicated.**
+
+| Claim | Seed 0 | Seed 1 | Seed 2 |
+|---|---|---|---|
+| Matched faithfulness positive and resolved | 11/12 cells | 11/12 | 11/12 |
+| Ladder monotone toward zero, grid 2→16 | 4/4 schemes | 4/4 | 4/4 |
+| Raw-vs-matched sign disagreement | 3/8 cells | 3/8 | 3/8 |
+| TEST 1 advantage grows with displacement | 4/4 | 4/4 | 4/4 |
+| Matched-metric P3 gate | 0/29 | 0/28 | 0/28 |
+
+Two details matter more than the counts. The single matched cell that does not resolve is the **same
+cell every time** — `black`/IG, at −0.00398, −0.00554, −0.00328, a 0.0023 range across seeds and
+0.62, 0.87 and 0.55 half-widths from zero. It is consistently unresolved, not unstable. And
+H2a's **structural** rule, not merely its count, replicates: the three disagreeing cells are
+`black`/grad_cam, `mean`/grad_cam and `uniform_noise`/grad_cam in all three seeds, and IG never
+disagrees. The concentration in the coarser-mapped explainer is what the resolution account predicts
+and a generic "the control matters" account does not.
+
+**H1a does not resolve under its own primary scheme, and this is the amendment's substantive finding.**
+§2 registers a *paired bootstrap of A − E*. `scripts/pilot_report.py` does not compute it: it reports
+A and E with separate intervals. The paired test is therefore **not implemented**, and what follows is
+a bound, not the registered statistic. Two bounds are given — `indep` = √(hw_A² + hw_E²), which assumes
+the two arms' errors are independent, and `cons` = hw_A + hw_E, which assumes the worst case. The true
+paired interval lies between them and is probably nearer `indep`, since both arms run over the same
+images, but "probably" is not a result.
+
+| scheme | A − E across seeds | indep | cons | verdict |
+|---|---|---|---|---|
+| `black` | +0.0986, +0.1016, +0.1001 | ~0.023 | ~0.032 | Supported on both bounds, all three seeds |
+| `uniform_noise` | +0.0647, +0.0627, +0.0525 | ~0.017 | ~0.024 | Supported on both bounds, all three seeds |
+| `mean` | +0.0446, +0.0293, +0.0419 | ~0.022 | ~0.031 | Seeds 0 and 2 on both bounds; **seed 1 clears `indep` only** |
+| `blur` | −0.0525, −0.0518, −0.0578 | ~0.016 | ~0.022 | **Against, all three seeds: the largest real effect exceeds the artifact** |
+
+`mean` is the primary scheme §2 declares, and `configs/version_a.yaml` runs it alone. So the
+pre-registered primary test of H1a is **marginal**: positive in every seed, but failing the
+conservative bound on one of three. H1a is recorded as supported under `black` and `uniform_noise`,
+unresolved under `mean`, and contradicted under `blur`. It is **not** recorded as supported overall,
+and the per-scheme-never-pooled rule A9 wrote into H1a is what makes that statement possible rather
+than hidden inside an average.
+
+Settling it requires the registered paired bootstrap. None of the three caches was saved, so that
+needs a re-run rather than a recomputation.
+
+**A new finding the replication produced: the raw gate's verdict moves with the seed.** Raw gate passes
+are 14/85, 16/82 and 12/87 — 16.5%, 19.5%, 13.8% — while the matched gate is 0/29, 0/28, 0/28. The raw
+metric is not only confounded by mask geometry; the pass count of the gate computed on it is unstable
+across seeds at a scale comparable to the differences between its arms. The matched gate fails
+consistently. A consistently failing gate is a usable measurement of precision; an unstable one is not,
+and §4 row 1's choice of control is strengthened by that as much as by A9's admissibility rule.
+
+**§4 row 3 stands as A10 decided it,** now on three seeds rather than one: the matched gate fails in
+all of them, the escalation to 2000 does not help, and the sample size stays at 1000 by the rule.
+
+**Calibration is consistent across seeds** and continues to be untouched by any of this: accuracy
+0.8610 / 0.8580 / 0.8620 → 0.5487 / 0.5530 / 0.5600; ECE_em 0.0516 / 0.0474 / 0.0566 → 0.2514 /
+0.2448 / 0.2391; AURC 0.0315 / 0.0299 / 0.0264 → 0.2702 / 0.2854 / 0.2707.
+
+**Scope, narrowed but not removed.** Three seeds of one architecture, 1000 images, three corruption
+families, one dataset. The central artifact demonstration needs none of that to generalise — the
+model-free ladder never touches the network, so its reading is a property of the metric, the imputation
+and the images rather than of a trained model. The matched comparison does depend on the model, and is
+now a three-seed result on `resnet18` alone. H1b, which is the geometry account's sharpest prediction
+and the only claim that would test it across attribution resolutions, remains unrunnable.
+
+**Freeze table, updated.** P3b.4 is discharged. §6's multi-seed aggregation is **not** discharged: the
+three seeds were reported separately, as `require_one_model_and_seed` requires, and that supports a
+descriptive replication claim but not H3a's mixed-effects fit. One row is added.
+
+| Before a tag can be cut | Status |
+|---|---|
+| §4 row 2 — `vit_tiny` fixed or dropped | Open. Blocks H1b and 80 of 240 Version A cells |
+| §4 row 3 — matched gate run and read | **Discharged** by A10, confirmed on three seeds by A11 |
+| §6 multi-seed aggregation implemented | Open. No longer blocks H1 or H2, still blocks H3a and H3b |
+| §6 validity controls amended to require an asymmetric control | Open. Recommended by H2b, not made |
+| §3 and §8 restated on the matched outcome | Open |
+| Version A's imputation axis settled | Open, and sharper: `mean` alone is the one scheme under which H1a does not resolve, and `blur` is the scheme that contradicts it. A single-scheme Version A would test H1a on its weakest case and omit its counterexample |
+| The geometry-matched control's non-trivial admissibility check | Open. Never run against an independently seeded draw at the same grid |
+| **H1a's paired bootstrap of A − E** | **Open, new.** Registered in §2, not implemented in `pilot_report.py`, and the caches were not saved, so it needs a re-run |
+| Seeds 1 and 2 (P3b.4) | **Discharged** |
+
+**A11, continued — three corrections and additions the replication forced, two of them to A10.**
+
+**(i) A10's n-scaling arithmetic is seed-specific and should not be quoted as a single number.** A10
+reported, from seed 0, that the best matched-gate pair reaches 0.10112 at n=2000 and "0 of 29 at
+n=2000". That holds for seeds 0 and 1, whose best ratios are both 0.143. Seed 2's best ratio is
+**0.134**, implying n≈1,796, so **one pair would pass at n=2000** on that seed. The scaled counts
+diverge further out — passes at n=3000/5000/10000 are 6/7/19 (seed 0), 5/7/17 (seed 1) and 3/12/20
+(seed 2).
+
+A10's **decision** stands: one pair of 28 is not a passing gate, the matched gate fails at n=1000 in
+all three seeds, and the sample size stays at 1000. But A10's supporting arithmetic was a single-seed
+extrapolation presented without that qualification, and the extrapolation turns out to be less stable
+than the thing it was extrapolating. The only figure that survives all three seeds is the one actually
+measured: **zero passes at n=1000.** No (n, pass-count) pair beyond that should be cited, here or in
+the manuscript.
+
+**(ii) H2a's 3-of-8 count is a point-estimate sign count, not H2a's registered test.** H2a as written
+counts a disagreement only where *both* the raw and the matched reading exclude zero in their own 95%
+interval. `scripts/pilot_report.py` prints no half-width on the arm-level raw mean, so the count in the
+table above compares signs of point estimates. On the per-severity half-widths the report does print:
+
+| scheme | raw grad_cam reading, resolved negative at severity … |
+|---|---|
+| `black` | 0, 1, 3, 5 — all four, all three seeds |
+| `uniform_noise` | 0, 1, 3, 5 — all four, all three seeds |
+| `mean` | **0 and 1 only.** Unresolved at 3 and 5 in all three seeds, and seed 1's severity-5 reading is **+0.00339 ± 0.01715** — positive |
+
+So two of the three disagreeing cells satisfy H2a's criterion at every severity in every seed, and the
+third — under `mean`, the primary scheme — rests on its clean and severity-1 readings. The primary
+scheme is the soft spot for H2a exactly as it is for H1a, and for the same underlying reason: `mean` is
+the scheme in which the artifact and the effect are closest in size. Implementing the arm-level
+interval would settle it and is a reporting change, not a protocol change.
+
+**(iii) The raw gate prefers a displaced map to a correctly-aimed one.** The pass membership moves as
+well as the count: 16 distinct (scheme, explainer, family) rows pass at least once and only 11 pass in
+all three seeds. The instructive case is Grad-CAM against its own displaced copy:
+
+| arm | raw-gate passes, out of 9 (3 schemes × 3 seeds) |
+|---|---|
+| `grad_cam_rolled` — the map with its aim destroyed | **9 of 9** — `black`, `mean` and `uniform_noise`, every seed |
+| `grad_cam` — the same map, correctly aimed | **4 of 9** — `black` and `mean`, seeds 0 and 1 only |
+
+Every one of the 42 passes across the three seeds is `gaussian_noise`; no other family passes anything
+in any seed. A gate that admits a deliberately mis-aimed attribution more than twice as reliably as the
+correctly-aimed one is not measuring the precision of a faithfulness claim. This is the sharpest single
+statement the study has produced about the raw metric, it is a three-seed result, and it belongs in the
+manuscript.
