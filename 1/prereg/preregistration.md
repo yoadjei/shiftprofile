@@ -1193,3 +1193,101 @@ in any seed. A gate that admits a deliberately mis-aimed attribution more than t
 correctly-aimed one is not measuring the precision of a faithfulness claim. This is the sharpest single
 statement the study has produced about the raw metric, it is a three-seed result, and it belongs in the
 manuscript.
+
+---
+
+| Date | Section | Change | Reason | Data seen at time of amendment |
+|---|---|---|---|---|
+| 2026-10-18 | §2, H1a | Recorded as **confirmation, not discovery**: the artifact is published prior art (ROAR 2019 and three later rediscoveries) | A12 | Full-text literature sweep, `docs/p8-related-work.md` |
+| 2026-10-18 | §2, H2b | Recorded as **partly prior art**: ROAR 2019 Fig. 2 already showed a non-retrained removal metric rates an inverted ranking as informative | A12 | As above |
+| 2026-10-18 | §2, H1 mechanism | Recorded as **not established, and currently contradicted by our own within-spread comparison**. A discriminating control is required | A12 | As above, plus TEST 2 across three seeds |
+
+**A12 — the literature says two of the four claims are not new, and our own data does not yet support the
+mechanism.**
+
+The novelty gate in `docs/p1-novelty-gate.md` was run for the degradation framing and its verdict made a
+validity-literature sweep unnecessary. That sweep has now been done for the framing actually being
+written, with full-text verification. It is in `docs/p8-related-work.md`. Two findings change what this
+study may claim.
+
+**(i) The artifact is prior art, four times over.** ROAR (Hooker et al. 2019) compares every estimator
+against a Sobel edge filter that is, in its words, *"entirely independent of the model parameters"*, and
+reports that *"base estimators also do not compare favorably to the performance of a sobel edge filter
+SOBEL."* Both sentences were read in the full text, not the abstract. Poppi et al. (2021, Fake-CAM),
+Gupta et al. (2022, Centered Gaussian) and Nieradzik et al. (2024, *"Uniform is better than GradCAM"*)
+report the same phenomenon independently. H1a's *proposition* — that a model-free map matches or beats
+real explainers on a removal metric — is therefore a replication, and the manuscript must present it as
+one. What is not prior art is the *mechanism* and the *magnitude in commensurable units*: none of the
+four varied the control's spatial scale, built a ladder, or reported the artifact in the same units as a
+matched explainer effect.
+
+**(ii) ROAR also pre-empts most of H2b.** Its §3 compares the ground-truth ranking, a random ranking and
+*"the inverted ground truth ranking (the worst possible estimate of importance)"*, and concludes that
+without retraining *"This incorrectly evaluates a completely incorrect feature ranking as being
+informative."* So "a non-retrained removal metric rates an inverted ranking as informative" is a 2019
+result. H2b's remaining content is narrower and should be stated as such: the specific invariance
+argument for the per-pixel-i.i.d. control, and the costed demonstration that a three-control
+pre-registered suite passed in practice under a real inverted-mask defect for months (A7, `lessons.md`
+L5). That is a methodological case study, not a new property of removal metrics.
+
+**(iii) The mechanism claim is not established, and our own data currently favours the alternative.**
+This is the amendment's substantive finding and it is a problem of design, not of positioning. Gupta et
+al. (2022) attribute their model-free blob's success to **dataset centrality bias** and test that
+attribution with an off-centre crop. Our ladder cannot distinguish their account from ours, because
+across it the two candidate variables are collinear. From TEST 2, seed 0, `mean`:
+
+| grid | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|
+| mask spread | 3.97 | 6.51 | 10.90 | 12.12 | 12.11 |
+| mask centroid distance from frame centre | 16.02 | 10.99 | 6.23 | 3.43 | 1.54 |
+| raw faithfulness | −0.160 | −0.125 | −0.098 | −0.073 | +0.002 |
+
+Spread rises monotonically, centre distance falls monotonically, and faithfulness rises toward zero. No
+contrast within the ladder separates them.
+
+Worse, the one near-controlled comparison the run does contain points the other way. Three arms sit at
+effectively identical spread and differ in centre distance:
+
+| arm | spread | centre distance | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|---|---|
+| `random` | 12.112 | 1.594 | +0.00007 | −0.00001 | −0.00002 |
+| `random_lowres_32` | 12.114 | 1.538 | +0.00164 | +0.00307 | −0.00025 |
+| `random_lowres_16` | 12.120 | **3.433** | **−0.07262** | **−0.07261** | **−0.08051** |
+
+Spread differs by 0.008 across the three, centre distance by 1.9, and faithfulness by 0.073 — in all
+three seeds. At fixed spread, the arm whose mask sits further from the frame centre reads far more
+negative. That is the pattern the centrality account predicts. It is not conclusive for centrality
+either, because `random_lowres_16` also differs in autocorrelation length and because `spread` — distance
+of masked pixels from their own centroid — saturates once a mask is dispersed and is therefore a poor
+proxy for spatial scale. The honest statement is that **the artifact is a property of mask geometry, and
+which geometric property is undetermined.**
+
+**What would settle it, and what the manuscript may say until then.** The discriminating control is a
+position-stratified ladder: within each grid, stratify the per-image results by the mask's distance from
+the frame centre. If faithfulness varies with centre distance *within* a grid, centrality is doing work;
+if it is flat within grids and varies across them, scale is. `scripts/mechanism_report.py` already
+computes a per-arm mask centroid in TEST 2, so this is a stratification of a quantity the code produces,
+not a new measurement — but it needs per-image values, and no cache was saved, so it needs a run.
+
+Until it is run, §2's H1 must be stated as a geometry claim without naming the geometric property, and
+the centrality account must be cited and left open. Claiming spatial scale on this evidence would be
+asserting a mechanism that our own strongest within-design comparison contradicts.
+
+**(iv) One scoping statement the manuscript owes ROAD.** ROAD's abstract names *"information leakage
+through the shape of the removed pixels"*, which a reviewer will read as covering us. It does not: ROAD's
+shape term is mask-class mutual information, which is zero by construction for a label-blind lattice
+blob, and the sweep confirmed by full-text search that ROAD contains no random-attribution baseline at
+all. But ROAD's Noisy Linear Imputation is not among this study's four schemes (`black`, `mean`, `blur`,
+`uniform_noise`), so the manuscript must either run one model-free ladder under it or state explicitly
+that the artifact is demonstrated under four simple schemes and not under learned inpainting. Silence on
+that point is not defensible.
+
+**(v) The resulting order of claims.** On the sweep's verdict and the above, the contributions in
+descending order of novelty are: the geometry-matched control family, `_rolled` especially, for which no
+XAI precedent was found; the power result, for which no competition was found at all; and the artifact
+itself, as a quantified replication whose ladder is intended to discriminate between the six published
+diagnoses — a role it cannot yet fill. §2's hypothesis order is unchanged by this amendment, but the
+manuscript's emphasis is not §2's to fix, and no renumbering is done here.
+
+**Nothing in A8–A11 is retracted.** A12 changes what the study may claim to have *discovered*, not any
+measured value.
